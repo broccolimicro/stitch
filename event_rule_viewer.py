@@ -4,7 +4,7 @@ import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QFileDialog, QPushButton, QLabel)
 from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPainterPath
-from PyQt5.QtCore import Qt, QRectF, QPointF
+from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF
 
 class Transition:
     """Represents a transition in the event-rule system."""
@@ -48,7 +48,7 @@ class GraphView(QWidget):
         self.min_scale = 0.001
         self.max_scale = 10.0
         self.vertical_spacing = 50
-        self.horizontal_margin = 50
+        self.horizontal_margin = 80  # Increased to provide space for signal names
         self.node_radius = 5
         self.setMinimumSize(600, 400)
         
@@ -82,6 +82,9 @@ class GraphView(QWidget):
                     if SimFileParser.normalize_variable(t.variable) == var:
                         self.variable_y_positions[t.variable] = y_pos
             
+            # Store unique variables for Y-axis labels
+            self.unique_variables = variables
+            
             # Reset view
             min_time, max_time = self.graph.get_min_max_time()
             self.scale = (self.width() - 2 * self.horizontal_margin) / (max(1, max_time - min_time))
@@ -91,6 +94,10 @@ class GraphView(QWidget):
     def time_to_x(self, time):
         """Convert a time value to an x-coordinate."""
         return time * self.scale + self.offset_x
+    
+    def x_to_time(self, x):
+        """Convert an x-coordinate to a time value."""
+        return (x - self.offset_x) / self.scale
     
     def paintEvent(self, event):
         if not self.graph or not self.graph.transitions:
@@ -102,6 +109,69 @@ class GraphView(QWidget):
         try:
             # Draw background
             painter.fillRect(self.rect(), QColor(240, 240, 240))
+            
+            # Draw Y-axis signal names
+            painter.setPen(QPen(QColor(0, 0, 0), 1))
+            font = QFont("Arial", 10)
+            painter.setFont(font)
+            
+            for var in self.unique_variables:
+                y = self.variable_y_positions[var]
+                # Draw variable name aligned to the left
+                text_rect = QRectF(5, y - 10, self.horizontal_margin - 10, 20)
+                painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, var)
+                
+                # Draw horizontal guide line
+                painter.setPen(QPen(QColor(200, 200, 200), 1, Qt.DashLine))
+                # Use QLineF for float coordinates
+                painter.drawLine(QLineF(self.horizontal_margin - 5, y, self.width(), y))
+                painter.setPen(QPen(QColor(0, 0, 0), 1))
+            
+            # Draw X-axis time labels
+            min_time, max_time = self.graph.get_min_max_time()
+            visible_min_time = max(min_time, self.x_to_time(0))
+            visible_max_time = min(max_time, self.x_to_time(self.width()))
+            
+            # Determine good intervals for time labels based on scale
+            time_range = visible_max_time - visible_min_time
+            if time_range <= 0:
+                time_range = max_time - min_time
+                
+            # Determine appropriate interval for time markers
+            if time_range > 100000:
+                interval = 10000
+            elif time_range > 10000:
+                interval = 1000
+            elif time_range > 1000:
+                interval = 100
+            elif time_range > 100:
+                interval = 10
+            else:
+                interval = 5
+                
+            # Calculate first time marker
+            first_time = (int(visible_min_time / interval) * interval)
+            
+            # Draw time markers and labels
+            y_axis_position = self.height() - 25  # Position of X-axis
+            painter.setPen(QPen(QColor(0, 0, 0), 1))
+            
+            for t in range(first_time, int(visible_max_time) + interval, interval):
+                x = self.time_to_x(t)
+                if x < self.horizontal_margin:
+                    continue
+                    
+                # Draw tick mark - use QLineF for float coordinates
+                painter.drawLine(QLineF(x, y_axis_position - 5, x, y_axis_position + 5))
+                
+                # Draw time label
+                text_rect = QRectF(x - 50, y_axis_position + 5, 100, 20)
+                painter.drawText(text_rect, Qt.AlignHCenter | Qt.AlignTop, str(t))
+                
+                # Draw vertical guide line - use QLineF for float coordinates
+                painter.setPen(QPen(QColor(220, 220, 220), 1, Qt.DotLine))
+                painter.drawLine(QLineF(x, 0, x, y_axis_position - 5))
+                painter.setPen(QPen(QColor(0, 0, 0), 1))
             
             # First pass: Draw the transition nodes
             for transition in self.graph.transitions:
