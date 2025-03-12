@@ -4,7 +4,7 @@ import os
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QFileDialog, QPushButton, QLabel, 
                            QSplitter, QListWidget, QListWidgetItem, QAbstractItemView,
-                           QToolButton, QGroupBox, QScrollArea, QMenu, QSizePolicy)
+                           QToolButton, QGroupBox, QScrollArea, QMenu, QSizePolicy, QComboBox)
 from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPainterPath, QCursor
 from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF, pyqtSignal, QMimeData, QEvent
 
@@ -508,6 +508,15 @@ class GraphView(QWidget):
     signals_changed = pyqtSignal(list)  # Emitted when signals are added, removed, or reordered
     signal_added = pyqtSignal(str)  # New signal to notify when a signal is added by drag and drop
     
+    # Constants for time units
+    TIME_UNITS = {
+        "ps": {"factor": 1, "label": "ps"},
+        "ns": {"factor": 1000, "label": "ns"},
+        "μs": {"factor": 1000000, "label": "μs"},
+        "ms": {"factor": 1000000000, "label": "ms"},
+        "s": {"factor": 1000000000000, "label": "s"}
+    }
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.graph = None
@@ -516,10 +525,17 @@ class GraphView(QWidget):
         self.min_scale = 0.001
         self.max_scale = 10.0
         self.vertical_spacing = 30  # Reduced spacing between signals
-        self.top_margin = 53  # Increased from 47 to move plot down by another ~1.5mm
+        self.top_margin = 22  # Added back 40% of vertical spacing (12px) to previous 10px value
         self.horizontal_margin = 50
         self.node_radius = 5
         self.setMinimumSize(600, 400)
+        
+        # Time unit for display (default: picoseconds)
+        self.time_unit = "ps"
+        self.time_factor = self.TIME_UNITS[self.time_unit]["factor"]
+        
+        # Minimum spacing between x-axis labels in pixels
+        self.min_label_spacing = 80
         
         # Variables to display
         self.display_variables = []  # List of variables to display in order
@@ -529,6 +545,13 @@ class GraphView(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setAcceptDrops(True)
         
+    def set_time_unit(self, unit):
+        """Set the time unit for display."""
+        if unit in self.TIME_UNITS:
+            self.time_unit = unit
+            self.time_factor = self.TIME_UNITS[unit]["factor"]
+            self.update()
+    
     def set_graph(self, graph):
         """Set the graph to display."""
         self.graph = graph
@@ -654,6 +677,12 @@ class GraphView(QWidget):
         """Convert an x-coordinate to a time value."""
         return (x - self.offset_x) / self.scale
     
+    def format_time(self, time):
+        """Format time value with appropriate unit."""
+        if self.time_factor > 1:
+            return f"{time / self.time_factor:.2f} {self.TIME_UNITS[self.time_unit]['label']}"
+        return f"{time} {self.TIME_UNITS[self.time_unit]['label']}"
+    
     def is_transition_visible(self, transition):
         """Check if a transition is visible in the current viewport."""
         if transition.variable not in self.variable_y_positions:
@@ -687,22 +716,31 @@ class GraphView(QWidget):
             visible_min_time = max(min_time, self.x_to_time(0))
             visible_max_time = min(max_time, self.x_to_time(self.width()))
             
-            # Determine good intervals for time labels based on scale
+            # Determine good intervals for time labels based on scale and available width
             time_range = visible_max_time - visible_min_time
-            if time_range <= 0:
-                time_range = max_time - min_time
-                
+            available_width = self.width() - 2 * self.horizontal_margin
+            
+            # Calculate minimum number of pixels per interval to avoid overlapping labels
+            min_pixels_per_interval = self.min_label_spacing
+            min_time_per_interval = min_pixels_per_interval / self.scale
+            
             # Determine appropriate interval for time markers
+            # Start with a small interval and increase until we have enough space
             if time_range > 100000:
-                interval = 10000
+                base_interval = 10000
             elif time_range > 10000:
-                interval = 1000
+                base_interval = 1000
             elif time_range > 1000:
-                interval = 100
+                base_interval = 100
             elif time_range > 100:
-                interval = 10
+                base_interval = 10
             else:
-                interval = 5
+                base_interval = 5
+                
+            # Adjust interval to prevent label crowding
+            interval = base_interval
+            while interval < time_range and (interval * self.scale) < min_pixels_per_interval:
+                interval *= 2
                 
             # Calculate first time marker
             first_time = (int(visible_min_time / interval) * interval)
@@ -719,9 +757,9 @@ class GraphView(QWidget):
                 # Draw tick mark - use QLineF for float coordinates
                 painter.drawLine(QLineF(x, y_axis_position - 5, x, y_axis_position + 5))
                 
-                # Draw time label
+                # Draw time label with appropriate unit
                 text_rect = QRectF(x - 50, y_axis_position + 5, 100, 20)
-                painter.drawText(text_rect, Qt.AlignHCenter | Qt.AlignTop, str(t))
+                painter.drawText(text_rect, Qt.AlignHCenter | Qt.AlignTop, self.format_time(t))
                 
                 # Draw vertical guide line - use QLineF for float coordinates
                 painter.setPen(QPen(QColor(220, 220, 220), 1, Qt.DotLine))
@@ -1193,35 +1231,69 @@ class MainWindow(QMainWindow):
         graph_container = QWidget()
         graph_layout = QHBoxLayout(graph_container)
         graph_layout.setContentsMargins(0, 0, 0, 0)
-        graph_layout.setSpacing(0)  # No space between selected signals and graph
+        graph_layout.setSpacing(0)  # No spacing between signals panel and graph
         
-        # Create the second splitter for selected signals and plot
-        self.signals_plot_splitter = QSplitter(Qt.Horizontal)
-        graph_layout.addWidget(self.signals_plot_splitter)
-        
-        # Create the selected signals panel (replaces y-axis labels)
+        # Create the selected signals panel (keep its original title)
         self.selected_signals_panel = SelectedSignalsPanel()
-        # Set similar margins to match available signals panel
         self.selected_signals_panel.layout().setContentsMargins(9, 9, 9, 9)
         self.selected_signals_panel.signal_removed.connect(self.remove_signal)
-        self.selected_signals_panel.signals_removed.connect(self.remove_signals)  # Connect new signal
+        self.selected_signals_panel.signals_removed.connect(self.remove_signals)
         self.selected_signals_panel.signals_reordered.connect(self.reorder_signals)
-        self.selected_signals_panel.setMinimumWidth(150)  # Increased from 100
-        self.selected_signals_panel.setMaximumWidth(300)  # Increased from 200
-        self.signals_plot_splitter.addWidget(self.selected_signals_panel)
+        self.selected_signals_panel.setMinimumWidth(150)
+        self.selected_signals_panel.setMaximumWidth(300)
+        
+        # Create graph view container with timescale control
+        graph_view_container = QWidget()
+        graph_view_layout = QVBoxLayout(graph_view_container)
+        graph_view_layout.setContentsMargins(0, 0, 0, 0)
+        graph_view_layout.setSpacing(2)
+        
+        # Add compact timescale selector above the graph
+        timescale_widget = QWidget()
+        timescale_layout = QHBoxLayout(timescale_widget)
+        timescale_layout.setContentsMargins(5, 5, 5, 0)
+        
+        timescale_label = QLabel("Timescale:")
+        timescale_label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
+        timescale_layout.addWidget(timescale_label)
+        
+        self.timescale_selector = QComboBox()
+        self.timescale_selector.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
+        for unit in GraphView.TIME_UNITS.keys():
+            self.timescale_selector.addItem(unit)
+        self.timescale_selector.setCurrentText("ps")  # Default to picoseconds
+        self.timescale_selector.currentTextChanged.connect(self.on_timescale_changed)
+        timescale_layout.addWidget(self.timescale_selector)
+        
+        # Add spacer to push timescale to the left
+        timescale_layout.addStretch(1)
+        
+        # Set minimal height for timescale widget
+        timescale_widget.setMaximumHeight(30)
+        
+        graph_view_layout.addWidget(timescale_widget)
         
         # Create the graph view
         self.graph_view = GraphView()
         self.graph_view.signals_changed.connect(self.update_selected_signals)
-        self.graph_view.signal_added.connect(self.handle_direct_signal_add)  # Connect new signal
-        self.signals_plot_splitter.addWidget(self.graph_view)
+        self.graph_view.signal_added.connect(self.handle_direct_signal_add)
+        graph_view_layout.addWidget(self.graph_view)
+        
+        # Add panels to the horizontal layout
+        graph_layout.addWidget(self.selected_signals_panel)
+        graph_layout.addWidget(graph_view_container)
         
         # Add the graph container to the main splitter
         self.main_splitter.addWidget(graph_container)
         
         # Set splitter sizes
         self.main_splitter.setSizes([150, 1050])  # Available signals panel gets 150px, the rest gets 1050px
-        self.signals_plot_splitter.setSizes([180, 870])  # Adjusted: Selected signals panel gets 180px (increased from 120px)
+        graph_layout.setStretch(0, 0)  # Selected signals panel shouldn't stretch
+        graph_layout.setStretch(1, 1)  # Graph view should stretch
+        
+        # Stretch ratios to maximize vertical space for the plot
+        graph_view_layout.setStretch(0, 0)  # Timescale widget doesn't stretch
+        graph_view_layout.setStretch(1, 1)  # Graph view stretches
         
         # Create a menu bar
         menu_bar = self.menuBar()
@@ -1254,6 +1326,10 @@ class MainWindow(QMainWindow):
         
         # Track the currently loaded graph
         self.current_graph = None
+
+    def on_timescale_changed(self, unit):
+        """Handle timescale selection change."""
+        self.graph_view.set_time_unit(unit)
 
     def view_initial_events(self):
         """Zoom to show the initial events view."""
