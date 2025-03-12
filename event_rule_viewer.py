@@ -865,13 +865,20 @@ class MainWindow(QMainWindow):
         # Create the main widget
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
-        main_layout = QHBoxLayout(main_widget)
+        main_layout = QVBoxLayout(main_widget)
         main_layout.setContentsMargins(5, 5, 5, 5)
+        main_layout.setSpacing(0)
+        
+        # Create a horizontal splitter for the main layout
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        main_layout.addWidget(self.main_splitter)
         
         # Create the available signals panel
         self.available_signals_panel = AvailableSignalsPanel()
         self.available_signals_panel.signal_added.connect(self.add_signal)
-        main_layout.addWidget(self.available_signals_panel)
+        self.available_signals_panel.setMinimumWidth(120)
+        self.available_signals_panel.setMaximumWidth(250)
+        self.main_splitter.addWidget(self.available_signals_panel)
         
         # Create a container widget for the selected signals panel and graph view
         graph_container = QWidget()
@@ -879,23 +886,29 @@ class MainWindow(QMainWindow):
         graph_layout.setContentsMargins(0, 0, 0, 0)
         graph_layout.setSpacing(0)  # No space between selected signals and graph
         
+        # Create the second splitter for selected signals and plot
+        self.signals_plot_splitter = QSplitter(Qt.Horizontal)
+        graph_layout.addWidget(self.signals_plot_splitter)
+        
         # Create the selected signals panel (replaces y-axis labels)
         self.selected_signals_panel = SelectedSignalsPanel()
         self.selected_signals_panel.signal_removed.connect(self.remove_signal)
         self.selected_signals_panel.signals_reordered.connect(self.reorder_signals)
-        graph_layout.addWidget(self.selected_signals_panel)
+        self.selected_signals_panel.setMinimumWidth(100)
+        self.selected_signals_panel.setMaximumWidth(200)
+        self.signals_plot_splitter.addWidget(self.selected_signals_panel)
         
         # Create the graph view
         self.graph_view = GraphView()
         self.graph_view.signals_changed.connect(self.update_selected_signals)
-        graph_layout.addWidget(self.graph_view)
+        self.signals_plot_splitter.addWidget(self.graph_view)
         
-        # Add the graph container to the main layout
-        main_layout.addWidget(graph_container)
+        # Add the graph container to the main splitter
+        self.main_splitter.addWidget(graph_container)
         
-        # Set size ratios for the main panels
-        main_layout.setStretch(0, 1)  # Available signals
-        main_layout.setStretch(1, 4)  # Graph container
+        # Set splitter sizes
+        self.main_splitter.setSizes([150, 1050])  # Available signals panel gets 150px, the rest gets 1050px
+        self.signals_plot_splitter.setSizes([120, 930])  # Selected signals panel gets 120px, plot gets 930px
         
         # Create a menu bar
         menu_bar = self.menuBar()
@@ -910,7 +923,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(self.file_label)
         
         # Add help text to the status bar
-        self.hint_label = QLabel(" | Right-click signal labels to remove | Drag signal labels to reorder")
+        self.hint_label = QLabel(" | Right-click signal labels to remove | Drag signal labels to reorder | Drag splitter handles to resize panels")
         self.statusBar().addWidget(self.hint_label)
         
         # Track the currently loaded graph
