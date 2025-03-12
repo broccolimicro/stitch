@@ -540,10 +540,54 @@ class GraphView(QWidget):
         # Variables to display
         self.display_variables = []  # List of variables to display in order
         
+        # Timing mode (true or normalized)
+        self.normalized_timing = False
+        self.normalized_times = []  # List of times in order for normalized view
+        self.original_times = []    # List of original times from the file
+        self.time_mapping = {}      # Maps original times to normalized times
+        
         # Enable mouse tracking and focus
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setAcceptDrops(True)
+        
+    def set_normalized_timing(self, enabled):
+        """Toggle between true timing and normalized timing."""
+        if self.normalized_timing != enabled:
+            self.normalized_timing = enabled
+            
+            if self.graph and self.graph.transitions:
+                if enabled:
+                    # Switch to normalized timing
+                    self.setup_normalized_times()
+                    # Start with a view of the entire timeline
+                    self.zoom_to_full_timeline()
+                else:
+                    # Switch back to true timing
+                    # Reset the view to show a reasonable portion of events
+                    self.zoom_to_initial_events()
+                    
+            self.update()
+            
+    def setup_normalized_times(self):
+        """Create a mapping from original times to normalized (evenly-spaced) times."""
+        if not self.graph or not self.graph.transitions:
+            return
+            
+        # Get all unique times from transitions
+        self.original_times = sorted(set(t.time for t in self.graph.transitions))
+        
+        # Create normalized times with fixed 500ps spacing
+        self.normalized_times = [i * 500 for i in range(len(self.original_times))]
+        
+        # Create mapping from original to normalized times
+        self.time_mapping = dict(zip(self.original_times, self.normalized_times))
+            
+    def get_displayed_time(self, time):
+        """Get the time value to display, either true or normalized."""
+        if self.normalized_timing and time in self.time_mapping:
+            return self.time_mapping[time]
+        return time
         
     def set_time_unit(self, unit):
         """Set the time unit for display."""
@@ -558,6 +602,9 @@ class GraphView(QWidget):
         if self.graph and self.graph.transitions:
             # Sort transitions by time
             self.graph.transitions.sort(key=lambda t: t.time)
+            
+            # Initialize normalized times
+            self.setup_normalized_times()
             
             # Get min and max time from the graph
             min_time, max_time = self.graph.get_min_max_time()
@@ -584,15 +631,21 @@ class GraphView(QWidget):
         """Zoom to show the first ~20 events (initial view)."""
         if self.graph and self.graph.transitions:
             # Get min and max time from the graph
-            min_time, max_time = self.graph.get_min_max_time()
-            
-            # Calculate target time based on number of events
-            if len(self.graph.transitions) > 20:
-                # Find the time of the 20th event
-                target_time = self.graph.transitions[19].time
+            if self.normalized_timing:
+                min_time = 0  # First normalized time is at 0ps
+                # Show first 20 events (or fewer if less available)
+                num_events = min(20, len(self.original_times))
+                # Each event is 500ps apart in normalized mode
+                target_time = (num_events - 1) * 500
             else:
-                # If fewer than 20 events, use a portion of the timeline
-                target_time = min_time + (max_time - min_time) * 0.2
+                min_time, max_time = self.graph.get_min_max_time()
+                # Calculate target time based on number of events
+                if len(self.graph.transitions) > 20:
+                    # Find the time of the 20th event
+                    target_time = self.graph.transitions[19].time
+                else:
+                    # If fewer than 20 events, use a portion of the timeline
+                    target_time = min_time + (max_time - min_time) * 0.2
                 
             # Add a small margin (10%) to make sure we see all events clearly
             visible_time_range = (target_time - min_time) * 1.1
@@ -607,7 +660,12 @@ class GraphView(QWidget):
         """Zoom out to show the entire timeline."""
         if self.graph and self.graph.transitions:
             # Get min and max time from the graph
-            min_time, max_time = self.graph.get_min_max_time()
+            if self.normalized_timing:
+                min_time = 0  # First normalized time is at 0ps
+                # In normalized timing, the max time is (n-1)*500 where n is number of events
+                max_time = (len(self.original_times) - 1) * 500
+            else:
+                min_time, max_time = self.graph.get_min_max_time()
             
             # Calculate scale to show the full timeline
             self.scale = (self.width() - 2 * self.horizontal_margin) / max(1, max_time - min_time)
@@ -671,14 +729,22 @@ class GraphView(QWidget):
         
     def time_to_x(self, time):
         """Convert a time value to an x-coordinate."""
-        return time * self.scale + self.offset_x
+        displayed_time = self.get_displayed_time(time)
+        return displayed_time * self.scale + self.offset_x
     
     def x_to_time(self, x):
         """Convert an x-coordinate to a time value."""
-        return (x - self.offset_x) / self.scale
+        time = (x - self.offset_x) / self.scale
+        # Note: This doesn't convert back from normalized time to original time
+        # since it's primarily used for visualization calculations
+        return time
     
     def format_time(self, time):
         """Format time value with appropriate unit."""
+        if self.normalized_timing:
+            # In normalized mode, always show in ps since we're using 500ps spacing
+            return f"{int(time)} ps"
+        
         if self.time_factor > 1:
             return f"{time / self.time_factor:.2f} {self.TIME_UNITS[self.time_unit]['label']}"
         return f"{time} {self.TIME_UNITS[self.time_unit]['label']}"
@@ -711,10 +777,19 @@ class GraphView(QWidget):
             min_visible_time = left_time - time_margin
             max_visible_time = right_time + time_margin
             
-            # Draw X-axis time labels
-            min_time, max_time = self.graph.get_min_max_time()
-            visible_min_time = max(min_time, self.x_to_time(0))
-            visible_max_time = min(max_time, self.x_to_time(self.width()))
+            # Determine if we're dealing with the true timing or normalized timing
+            if self.normalized_timing:
+                # For normalized mode, we need appropriate time values
+                visible_min_time = min_visible_time
+                visible_max_time = max_visible_time
+                
+                # Get the min/max of original times for informational purposes
+                orig_min_time, orig_max_time = self.graph.get_min_max_time()
+            else:
+                # For true timing, use the actual min/max from the graph
+                min_time, max_time = self.graph.get_min_max_time()
+                visible_min_time = max(min_time, min_visible_time)
+                visible_max_time = min(max_time, max_visible_time)
             
             # Determine good intervals for time labels based on scale and available width
             time_range = visible_max_time - visible_min_time
@@ -725,17 +800,26 @@ class GraphView(QWidget):
             min_time_per_interval = min_pixels_per_interval / self.scale
             
             # Determine appropriate interval for time markers
-            # Start with a small interval and increase until we have enough space
-            if time_range > 100000:
-                base_interval = 10000
-            elif time_range > 10000:
-                base_interval = 1000
-            elif time_range > 1000:
-                base_interval = 100
-            elif time_range > 100:
-                base_interval = 10
+            # In normalized mode, use fixed intervals (multiples of 500ps)
+            if self.normalized_timing:
+                if time_range > 10000:  # > 10ns
+                    base_interval = 2500  # 5 * 500ps
+                elif time_range > 5000:  # > 5ns
+                    base_interval = 1000  # 2 * 500ps
+                else:
+                    base_interval = 500   # 1 * 500ps
             else:
-                base_interval = 5
+                # For true timing, use the dynamic approach based on the time range
+                if time_range > 100000:
+                    base_interval = 10000
+                elif time_range > 10000:
+                    base_interval = 1000
+                elif time_range > 1000:
+                    base_interval = 100
+                elif time_range > 100:
+                    base_interval = 10
+                else:
+                    base_interval = 5
                 
             # Adjust interval to prevent label crowding
             interval = base_interval
@@ -743,7 +827,11 @@ class GraphView(QWidget):
                 interval *= 2
                 
             # Calculate first time marker
-            first_time = (int(visible_min_time / interval) * interval)
+            if self.normalized_timing:
+                # For normalized timing, ensure we're starting at a multiple of the interval
+                first_time = (int(visible_min_time / interval) * interval)
+            else:
+                first_time = (int(visible_min_time / interval) * interval)
             
             # Draw time markers and labels
             y_axis_position = self.height() - 25  # Position of X-axis
@@ -780,17 +868,25 @@ class GraphView(QWidget):
                 norm_var = SimFileParser.normalize_variable(transition.variable)
                 if norm_var not in self.display_variables:
                     continue
-                    
-                # Skip if not in viewport time range
-                if transition.time < min_visible_time or transition.time > max_visible_time:
-                    continue
+                
+                # For normalized timing, we need to use the mapped time
+                if self.normalized_timing:
+                    display_time = self.get_displayed_time(transition.time)
+                    # Skip if not in viewport time range
+                    if display_time < min_visible_time or display_time > max_visible_time:
+                        continue
+                else:
+                    # For true timing, use the actual time
+                    # Skip if not in viewport time range
+                    if transition.time < min_visible_time or transition.time > max_visible_time:
+                        continue
                     
                 # Skip if variable position is not defined
                 if transition.variable not in self.variable_y_positions:
                     continue
                     
                 visible_transitions.append(transition)
-            
+                
             # Build a dictionary of visible transitions for quick lookup
             visible_transitions_dict = {id(t): t for t in visible_transitions}
             
@@ -827,7 +923,7 @@ class GraphView(QWidget):
                 painter.drawText(text_pos, label)
             
             # Second pass: Draw links/arrows if either end is visible
-            # Process all transitions rather than just visible ones
+            # Process all transitions, not just visible ones to ensure links that span the viewport are shown
             for transition in self.graph.transitions:
                 # Skip if variable is not in displayed list (normalized form)
                 norm_var = SimFileParser.normalize_variable(transition.variable)
@@ -839,7 +935,12 @@ class GraphView(QWidget):
                     continue
                 
                 # Check if this transition is visible
-                target_visible = (min_visible_time <= transition.time <= max_visible_time)
+                if self.normalized_timing:
+                    display_time = self.get_displayed_time(transition.time)
+                    target_visible = (min_visible_time <= display_time <= max_visible_time)
+                else:
+                    target_visible = (min_visible_time <= transition.time <= max_visible_time)
+                    
                 if not target_visible and id(transition) not in visible_transitions_dict:
                     # If target is not visible, we'll check each source later
                     pass
@@ -858,7 +959,11 @@ class GraphView(QWidget):
                         continue
                     
                     # Check if source is visible
-                    source_visible = (min_visible_time <= source.time <= max_visible_time)
+                    if self.normalized_timing:
+                        display_time = self.get_displayed_time(source.time)
+                        source_visible = (min_visible_time <= display_time <= max_visible_time)
+                    else:
+                        source_visible = (min_visible_time <= source.time <= max_visible_time)
                     
                     # Skip if both source and target are invisible
                     if not source_visible and not target_visible:
@@ -918,7 +1023,11 @@ class GraphView(QWidget):
                         continue
                     
                     # Check if source is visible
-                    source_visible = (min_visible_time <= source.time <= max_visible_time)
+                    if self.normalized_timing:
+                        display_time = self.get_displayed_time(source.time)
+                        source_visible = (min_visible_time <= display_time <= max_visible_time)
+                    else:
+                        source_visible = (min_visible_time <= source.time <= max_visible_time)
                     
                     # Skip if both source and target are invisible
                     if not source_visible and not target_visible:
@@ -1265,7 +1374,18 @@ class MainWindow(QMainWindow):
         self.timescale_selector.currentTextChanged.connect(self.on_timescale_changed)
         timescale_layout.addWidget(self.timescale_selector)
         
-        # Add spacer to push timescale to the left
+        # Add spacing between timescale selector and timing mode toggle
+        timescale_layout.addSpacing(15)
+        
+        # Add timing mode toggle button
+        self.timing_mode_button = QPushButton("True Timing")
+        self.timing_mode_button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
+        self.timing_mode_button.setCheckable(True)
+        self.timing_mode_button.setChecked(False)
+        self.timing_mode_button.clicked.connect(self.toggle_timing_mode)
+        timescale_layout.addWidget(self.timing_mode_button)
+        
+        # Add spacer to push controls to the left
         timescale_layout.addStretch(1)
         
         # Set minimal height for timescale widget
@@ -1327,6 +1447,15 @@ class MainWindow(QMainWindow):
         # Track the currently loaded graph
         self.current_graph = None
 
+    def toggle_timing_mode(self):
+        """Toggle between true timing and normalized timing modes."""
+        if self.timing_mode_button.isChecked():
+            self.timing_mode_button.setText("Normalized (500ps)")
+            self.graph_view.set_normalized_timing(True)
+        else:
+            self.timing_mode_button.setText("True Timing")
+            self.graph_view.set_normalized_timing(False)
+            
     def on_timescale_changed(self, unit):
         """Handle timescale selection change."""
         self.graph_view.set_time_unit(unit)
