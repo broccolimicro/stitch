@@ -218,6 +218,16 @@ class GraphView(QWidget):
         # Return the index of the closest variable
         return distances[0][1]
     
+    def is_transition_visible(self, transition):
+        """Check if a transition is visible in the current viewport."""
+        if transition.variable not in self.variable_y_positions:
+            return False
+            
+        x = self.time_to_x(transition.time)
+        # Add a small margin to include transitions just outside the viewport
+        margin = 20
+        return (-margin <= x <= self.width() + margin)
+    
     def paintEvent(self, event):
         if not self.graph or not self.graph.transitions:
             return
@@ -229,47 +239,12 @@ class GraphView(QWidget):
             # Draw background
             painter.fillRect(self.rect(), QColor(240, 240, 240))
             
-            # Draw interactive Y-axis signal labels with different background
-            painter.setPen(QPen(QColor(0, 0, 0), 1))
-            font = QFont("Arial", 10)
-            painter.setFont(font)
-            
-            # First pass: Draw the label backgrounds
-            for var in self.display_variables:
-                if var not in self.variable_y_positions:
-                    continue
-                
-                rect = self.label_rects[var]
-                
-                # Draw label background
-                if self.dragging_label == var:
-                    # Highlight when dragging
-                    painter.fillRect(rect, QColor(200, 220, 255))
-                else:
-                    # Normal background
-                    painter.fillRect(rect, QColor(230, 230, 230))
-                
-                # Draw label border
-                painter.setPen(QPen(QColor(180, 180, 180), 1))
-                painter.drawRect(rect)
-            
-            # Second pass: Draw the labels
-            painter.setPen(QPen(QColor(0, 0, 0), 1))
-            for var in self.display_variables:
-                if var not in self.variable_y_positions:
-                    continue
-                
-                y = self.variable_y_positions[var]
-                rect = self.label_rects[var]
-                
-                # Draw variable name aligned to the left
-                painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, var)
-                
-                # Draw horizontal guide line
-                painter.setPen(QPen(QColor(200, 200, 200), 1, Qt.DashLine))
-                # Use QLineF for float coordinates
-                painter.drawLine(QLineF(self.horizontal_margin - 5, y, self.width(), y))
-                painter.setPen(QPen(QColor(0, 0, 0), 1))
+            # Get the visible time range for culling
+            left_time = self.x_to_time(0)
+            right_time = self.x_to_time(self.width())
+            time_margin = (right_time - left_time) * 0.1  # 10% margin
+            min_visible_time = left_time - time_margin
+            max_visible_time = right_time + time_margin
             
             # Draw X-axis time labels
             min_time, max_time = self.graph.get_min_max_time()
@@ -324,17 +299,35 @@ class GraphView(QWidget):
                 painter.drawText(message_rect, Qt.AlignCenter, 
                                 "No signals selected\nSelect signals from the Available Signals panel")
             
-            # First pass: Draw the transition nodes for displayed variables only
+            # Filter visible transitions for better performance
+            visible_transitions = []
             for transition in self.graph.transitions:
                 # Skip if variable is not in displayed list (normalized form)
                 norm_var = SimFileParser.normalize_variable(transition.variable)
                 if norm_var not in self.display_variables:
                     continue
                     
+                # Skip if not in viewport time range
+                if transition.time < min_visible_time or transition.time > max_visible_time:
+                    continue
+                    
                 # Skip if variable position is not defined
                 if transition.variable not in self.variable_y_positions:
                     continue
-                
+                    
+                visible_transitions.append(transition)
+            
+            # Draw horizontal guide lines (behind nodes and arcs)
+            painter.setPen(QPen(QColor(200, 200, 200), 1, Qt.DashLine))
+            for var in self.display_variables:
+                if var not in self.variable_y_positions:
+                    continue
+                    
+                y = self.variable_y_positions[var]
+                painter.drawLine(QLineF(self.horizontal_margin - 5, y, self.width(), y))
+            
+            # First pass: Draw the transition nodes for visible transitions only
+            for transition in visible_transitions:                
                 # Draw node
                 x = self.time_to_x(transition.time)
                 y = self.variable_y_positions[transition.variable]
@@ -356,27 +349,22 @@ class GraphView(QWidget):
                 text_pos = QPointF(x + self.node_radius + 2, y - self.node_radius - 2)
                 painter.drawText(text_pos, label)
             
-            # Second pass: Draw the links/arrows only for displayed variables
-            for transition in self.graph.transitions:
-                # Skip if variable is not in displayed list (normalized form)
-                norm_var = SimFileParser.normalize_variable(transition.variable)
-                if norm_var not in self.display_variables:
-                    continue
-                    
-                # Skip if variable position is not defined
-                if transition.variable not in self.variable_y_positions:
-                    continue
-                
+            # Second pass: Draw the links/arrows only for visible transitions
+            for transition in visible_transitions:
                 x = self.time_to_x(transition.time)
                 y = self.variable_y_positions[transition.variable]
                 
-                # Draw incoming links (causal dependencies) only if source is displayed
+                # Draw incoming links (causal dependencies) only if source is displayed and visible
                 for source in transition.incoming_links:
                     source_norm_var = SimFileParser.normalize_variable(source.variable)
                     if source_norm_var not in self.display_variables:
                         continue
                         
                     if source.variable not in self.variable_y_positions:
+                        continue
+                    
+                    # Skip links from transitions outside of the visible range
+                    if source.time < min_visible_time:
                         continue
                     
                     src_x = self.time_to_x(source.time)
@@ -431,6 +419,10 @@ class GraphView(QWidget):
                     if source.variable not in self.variable_y_positions:
                         continue
                     
+                    # Skip links from transitions outside of the visible range
+                    if source.time < min_visible_time:
+                        continue
+                    
                     src_x = self.time_to_x(source.time)
                     src_y = self.variable_y_positions[source.variable]
                     
@@ -469,6 +461,41 @@ class GraphView(QWidget):
                         painter.setBrush(QBrush(QColor(200, 100, 0)))
                         points = [QPointF(x, y), p1, p2]
                         painter.drawPolygon(points)
+            
+            # Draw Y-axis signal labels LAST so they appear on top of everything
+            painter.setPen(QPen(QColor(0, 0, 0), 1))
+            font = QFont("Arial", 10)
+            painter.setFont(font)
+            
+            # First pass: Draw the label backgrounds with higher opacity
+            for var in self.display_variables:
+                if var not in self.variable_y_positions:
+                    continue
+                
+                rect = self.label_rects[var]
+                
+                # Draw label background with higher opacity
+                if self.dragging_label == var:
+                    # Highlight when dragging
+                    painter.fillRect(rect, QColor(200, 220, 255, 245))  # More opaque blue
+                else:
+                    # Normal background
+                    painter.fillRect(rect, QColor(240, 240, 240, 245))  # More opaque gray
+                
+                # Draw label border
+                painter.setPen(QPen(QColor(120, 120, 120), 1))
+                painter.drawRect(rect)
+            
+            # Second pass: Draw the labels
+            painter.setPen(QPen(QColor(0, 0, 0), 1))
+            for var in self.display_variables:
+                if var not in self.variable_y_positions:
+                    continue
+                
+                rect = self.label_rects[var]
+                
+                # Draw variable name aligned to the left
+                painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, var)
         finally:
             # Ensure painter is ended properly
             painter.end()
