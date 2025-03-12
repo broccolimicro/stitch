@@ -45,6 +45,7 @@ class EventRuleGraph:
 class AvailableSignalsPanel(QWidget):
     """Panel showing available signals that can be added to the graph."""
     signal_added = pyqtSignal(str)
+    signals_added = pyqtSignal(list)  # New signal for batch adding
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -71,20 +72,57 @@ class AvailableSignalsPanel(QWidget):
         # Set size policy - Fix: use QSizePolicy instead of QSplitter.Policy
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         
+        # Keep track of all signals and which ones are currently selected
+        self.all_signals = []
+        self.selected_signals = []
+        
     def set_available_signals(self, signals):
         """Set the list of available signals."""
-        self.available_signals.clear()
-        for signal in sorted(signals):
-            self.available_signals.addItem(signal)
+        self.all_signals = sorted(signals)
+        self.refresh_list()
             
     def add_selected_signals(self):
         """Add selected signals to the graph view."""
-        for item in self.available_signals.selectedItems():
-            self.signal_added.emit(item.text())
+        # First collect all selected signal names to avoid modifying the list while iterating
+        signals_to_add = [item.text() for item in self.available_signals.selectedItems()]
+        
+        if signals_to_add:
+            # Emit a batch signal if multiple signals are selected
+            if len(signals_to_add) > 1:
+                self.signals_added.emit(signals_to_add)
+            else:
+                # For a single signal, use the existing signal for backward compatibility
+                self.signal_added.emit(signals_to_add[0])
             
     def on_item_double_clicked(self, item):
         """Handle double-click on an available signal to add it."""
         self.signal_added.emit(item.text())
+    
+    def hide_signal(self, signal_name):
+        """Hide a signal from the available list when it's added to selected signals."""
+        if signal_name in self.all_signals:
+            self.selected_signals.append(signal_name)
+            self.refresh_list()
+    
+    def hide_signals(self, signal_names):
+        """Hide multiple signals at once from the available list."""
+        for signal_name in signal_names:
+            if signal_name in self.all_signals and signal_name not in self.selected_signals:
+                self.selected_signals.append(signal_name)
+        self.refresh_list()
+    
+    def show_signal(self, signal_name):
+        """Show a signal in the available list when it's removed from selected signals."""
+        if signal_name in self.selected_signals:
+            self.selected_signals.remove(signal_name)
+            self.refresh_list()
+    
+    def refresh_list(self):
+        """Refresh the list to show only signals that aren't currently selected."""
+        self.available_signals.clear()
+        for signal in self.all_signals:
+            if signal not in self.selected_signals:
+                self.available_signals.addItem(signal)
 
 class SelectedSignalsPanel(QWidget):
     """Panel showing selected signals that lines up with the plot."""
@@ -463,12 +501,12 @@ class SelectedSignalsPanel(QWidget):
             signal_name = event.mimeData().text()
             self.add_signal(signal_name)
             event.acceptProposedAction()
-            return True
         return False
 
 class GraphView(QWidget):
     """Widget for rendering the event-rule graph with interactive signal labels."""
     signals_changed = pyqtSignal(list)  # Emitted when signals are added, removed, or reordered
+    signal_added = pyqtSignal(str)  # New signal to notify when a signal is added by drag and drop
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -498,13 +536,61 @@ class GraphView(QWidget):
             # Sort transitions by time
             self.graph.transitions.sort(key=lambda t: t.time)
             
-            # Reset view
+            # Get min and max time from the graph
             min_time, max_time = self.graph.get_min_max_time()
-            self.scale = (self.width() - 2 * self.horizontal_margin) / (max(1, max_time - min_time))
+            
+            # Start zoomed in to show only the first ~20 events
+            if len(self.graph.transitions) > 20:
+                # Find the time of the 20th event
+                target_time = self.graph.transitions[19].time
+            else:
+                # If fewer than 20 events, use a portion of the timeline
+                target_time = min_time + (max_time - min_time) * 0.2
+                
+            # Add a small margin (10%) to make sure we see all events clearly
+            visible_time_range = (target_time - min_time) * 1.1
+            
+            # Calculate scale to show just this portion of the timeline
+            self.scale = (self.width() - 2 * self.horizontal_margin) / max(1, visible_time_range)
             self.offset_x = -min_time * self.scale + self.horizontal_margin
             
             self.update_variable_positions()
         self.update()
+    
+    def zoom_to_initial_events(self):
+        """Zoom to show the first ~20 events (initial view)."""
+        if self.graph and self.graph.transitions:
+            # Get min and max time from the graph
+            min_time, max_time = self.graph.get_min_max_time()
+            
+            # Calculate target time based on number of events
+            if len(self.graph.transitions) > 20:
+                # Find the time of the 20th event
+                target_time = self.graph.transitions[19].time
+            else:
+                # If fewer than 20 events, use a portion of the timeline
+                target_time = min_time + (max_time - min_time) * 0.2
+                
+            # Add a small margin (10%) to make sure we see all events clearly
+            visible_time_range = (target_time - min_time) * 1.1
+            
+            # Calculate scale to show just this portion of the timeline
+            self.scale = (self.width() - 2 * self.horizontal_margin) / max(1, visible_time_range)
+            self.offset_x = -min_time * self.scale + self.horizontal_margin
+            
+            self.update()
+    
+    def zoom_to_full_timeline(self):
+        """Zoom out to show the entire timeline."""
+        if self.graph and self.graph.transitions:
+            # Get min and max time from the graph
+            min_time, max_time = self.graph.get_min_max_time()
+            
+            # Calculate scale to show the full timeline
+            self.scale = (self.width() - 2 * self.horizontal_margin) / max(1, max_time - min_time)
+            self.offset_x = -min_time * self.scale + self.horizontal_margin
+            
+            self.update()
             
     def set_display_variables(self, variables):
         """Set which variables to display and in what order."""
@@ -882,6 +968,8 @@ class GraphView(QWidget):
         if event.mimeData().hasText():
             signal_name = event.mimeData().text()
             self.add_variable(signal_name)
+            # Emit a signal to notify that a signal was added via drag and drop
+            self.signal_added.emit(signal_name)
             event.acceptProposedAction()
 
     def mouseDoubleClickEvent(self, event):
@@ -1096,6 +1184,7 @@ class MainWindow(QMainWindow):
         # Create the available signals panel
         self.available_signals_panel = AvailableSignalsPanel()
         self.available_signals_panel.signal_added.connect(self.add_signal)
+        self.available_signals_panel.signals_added.connect(self.add_signals)  # Connect new signal
         self.available_signals_panel.setMinimumWidth(120)
         self.available_signals_panel.setMaximumWidth(250)
         self.main_splitter.addWidget(self.available_signals_panel)
@@ -1117,13 +1206,14 @@ class MainWindow(QMainWindow):
         self.selected_signals_panel.signal_removed.connect(self.remove_signal)
         self.selected_signals_panel.signals_removed.connect(self.remove_signals)  # Connect new signal
         self.selected_signals_panel.signals_reordered.connect(self.reorder_signals)
-        self.selected_signals_panel.setMinimumWidth(100)
-        self.selected_signals_panel.setMaximumWidth(200)
+        self.selected_signals_panel.setMinimumWidth(150)  # Increased from 100
+        self.selected_signals_panel.setMaximumWidth(300)  # Increased from 200
         self.signals_plot_splitter.addWidget(self.selected_signals_panel)
         
         # Create the graph view
         self.graph_view = GraphView()
         self.graph_view.signals_changed.connect(self.update_selected_signals)
+        self.graph_view.signal_added.connect(self.handle_direct_signal_add)  # Connect new signal
         self.signals_plot_splitter.addWidget(self.graph_view)
         
         # Add the graph container to the main splitter
@@ -1131,7 +1221,7 @@ class MainWindow(QMainWindow):
         
         # Set splitter sizes
         self.main_splitter.setSizes([150, 1050])  # Available signals panel gets 150px, the rest gets 1050px
-        self.signals_plot_splitter.setSizes([120, 930])  # Selected signals panel gets 120px, plot gets 930px
+        self.signals_plot_splitter.setSizes([180, 870])  # Adjusted: Selected signals panel gets 180px (increased from 120px)
         
         # Create a menu bar
         menu_bar = self.menuBar()
@@ -1141,16 +1231,39 @@ class MainWindow(QMainWindow):
         load_action = file_menu.addAction("Load .sim File")
         load_action.triggered.connect(self.load_sim_file)
         
+        # Create View menu
+        view_menu = menu_bar.addMenu("View")
+        
+        # Add View Initial Events action to View menu
+        view_initial_action = view_menu.addAction("View Initial Events")
+        view_initial_action.triggered.connect(self.view_initial_events)
+        view_initial_action.setShortcut("Ctrl+I")  # Add keyboard shortcut
+        
+        # Add View Full Timeline action to View menu
+        view_full_action = view_menu.addAction("View Full Timeline")
+        view_full_action.triggered.connect(self.view_full_timeline)
+        view_full_action.setShortcut("Ctrl+F")  # Add keyboard shortcut
+        
         # Update file label to be part of the status bar
         self.file_label = QLabel("No file loaded")
         self.statusBar().addWidget(self.file_label)
         
         # Add help text to the status bar
-        self.hint_label = QLabel(" | Drag signals to add or reorder | Ctrl+Click or draw box to multi-select | Right-click to remove selected signal(s)")
+        self.hint_label = QLabel(" | Drag to add/reorder | Ctrl+Click for selection | Shift+Scroll to zoom | Ctrl+I: initial view | Ctrl+F: full view")
         self.statusBar().addWidget(self.hint_label)
         
         # Track the currently loaded graph
         self.current_graph = None
+
+    def view_initial_events(self):
+        """Zoom to show the initial events view."""
+        if self.graph_view:
+            self.graph_view.zoom_to_initial_events()
+
+    def view_full_timeline(self):
+        """Zoom out to see the full timeline."""
+        if self.graph_view:
+            self.graph_view.zoom_to_full_timeline()
 
     def load_sim_file(self):
         """Open a file dialog to select and load a .sim file."""
@@ -1175,16 +1288,38 @@ class MainWindow(QMainWindow):
                 
     def add_signal(self, signal_name):
         """Add a signal to the graph view and update the selected signals panel."""
+        # Hide the signal from available signals panel
+        self.available_signals_panel.hide_signal(signal_name)
+        
+        # Add to graph view and selected signals panel
         self.graph_view.add_variable(signal_name)
         self.selected_signals_panel.add_signal(signal_name)
+    
+    def add_signals(self, signal_names):
+        """Add multiple signals to the graph view at once."""
+        # Hide all signals from available panel first
+        self.available_signals_panel.hide_signals(signal_names)
+        
+        # Add each signal to the graph and selected signals panel
+        for signal_name in signal_names:
+            self.graph_view.add_variable(signal_name)
+            self.selected_signals_panel.add_signal(signal_name)
         
     def remove_signal(self, signal_name):
         """Remove a signal from the graph view."""
+        # Show the signal in available signals panel
+        self.available_signals_panel.show_signal(signal_name)
+        
+        # Remove from graph view
         self.graph_view.remove_variable(signal_name)
         
     def remove_signals(self, signal_names):
         """Remove multiple signals from the graph view."""
         for signal_name in signal_names:
+            # Show each signal in available signals panel
+            self.available_signals_panel.show_signal(signal_name)
+            
+            # Remove from graph view
             self.graph_view.remove_variable(signal_name)
         
     def reorder_signals(self, signals):
@@ -1194,6 +1329,14 @@ class MainWindow(QMainWindow):
     def update_selected_signals(self, signals):
         """Update the selected signals panel with the current signals in the graph."""
         self.selected_signals_panel.set_signals(signals)
+
+    def handle_direct_signal_add(self, signal_name):
+        """Handle when a signal is added directly to the graph via drag and drop."""
+        # Hide the signal from available signals panel
+        self.available_signals_panel.hide_signal(signal_name)
+        
+        # Add to the selected signals panel
+        self.selected_signals_panel.add_signal(signal_name)
 
 def main():
     app = QApplication(sys.argv)
