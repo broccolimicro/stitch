@@ -462,40 +462,52 @@ class GraphView(QWidget):
                         points = [QPointF(x, y), p1, p2]
                         painter.drawPolygon(points)
             
-            # Draw Y-axis signal labels LAST so they appear on top of everything
-            painter.setPen(QPen(QColor(0, 0, 0), 1))
-            font = QFont("Arial", 10)
-            painter.setFont(font)
-            
-            # First pass: Draw the label backgrounds with higher opacity
-            for var in self.display_variables:
-                if var not in self.variable_y_positions:
-                    continue
+            # Draw Y-axis signal labels as a single continuous block
+            if self.display_variables:
+                painter.setPen(QPen(QColor(0, 0, 0), 1))
+                font = QFont("Arial", 10)
+                painter.setFont(font)
                 
-                rect = self.label_rects[var]
-                
-                # Draw label background with higher opacity
-                if self.dragging_label == var:
-                    # Highlight when dragging
-                    painter.fillRect(rect, QColor(200, 220, 255, 245))  # More opaque blue
-                else:
-                    # Normal background
-                    painter.fillRect(rect, QColor(240, 240, 240, 245))  # More opaque gray
-                
-                # Draw label border
-                painter.setPen(QPen(QColor(120, 120, 120), 1))
-                painter.drawRect(rect)
-            
-            # Second pass: Draw the labels
-            painter.setPen(QPen(QColor(0, 0, 0), 1))
-            for var in self.display_variables:
-                if var not in self.variable_y_positions:
-                    continue
-                
-                rect = self.label_rects[var]
-                
-                # Draw variable name aligned to the left
-                painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, var)
+                # Calculate the overall area for the signal block
+                if len(self.display_variables) > 0:
+                    # Find the top and bottom y positions
+                    top_vars = [var for var in self.display_variables if var in self.variable_y_positions]
+                    if top_vars:  # Only proceed if we have valid variables
+                        min_y = min(self.variable_y_positions[var] - 15 for var in top_vars)
+                        max_y = max(self.variable_y_positions[var] + 15 for var in top_vars)
+                        
+                        # Create the overall background rectangle for all signals
+                        signal_block_rect = QRectF(5, min_y, self.horizontal_margin - 10, max_y - min_y)
+                        
+                        # Draw a unified background with a slight border
+                        background_color = QColor(240, 240, 240, 245)  # Slightly transparent light gray
+                        border_color = QColor(120, 120, 120)
+                        
+                        painter.setBrush(QBrush(background_color))
+                        painter.setPen(QPen(border_color, 1))
+                        painter.drawRect(signal_block_rect)
+                        
+                        # Draw light divider lines between signal names for better readability
+                        painter.setPen(QPen(QColor(200, 200, 200), 1))
+                        for var in self.display_variables[:-1]:  # All but the last
+                            if var in self.variable_y_positions:
+                                y = self.variable_y_positions[var] + 15  # Bottom of this signal's area
+                                painter.drawLine(QLineF(5, y, self.horizontal_margin - 5, y))
+                        
+                        # Draw each signal name
+                        painter.setPen(QPen(QColor(0, 0, 0), 1))
+                        for var in self.display_variables:
+                            if var in self.variable_y_positions:
+                                y = self.variable_y_positions[var]
+                                
+                                # Highlight dragging with a different background for just that signal
+                                if self.dragging_label == var:
+                                    highlight_rect = QRectF(5, y - 15, self.horizontal_margin - 10, 30)
+                                    painter.fillRect(highlight_rect, QColor(200, 220, 255, 245))
+                                
+                                # Draw the signal name
+                                text_rect = QRectF(10, y - 10, self.horizontal_margin - 15, 20)
+                                painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, var)
         finally:
             # Ensure painter is ended properly
             painter.end()
