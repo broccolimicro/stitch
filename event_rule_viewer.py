@@ -60,6 +60,7 @@ class AvailableSignalsPanel(QWidget):
         self.available_signals.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.available_signals.setDragEnabled(True)
         self.available_signals.setAcceptDrops(False)
+        self.available_signals.itemDoubleClicked.connect(self.on_item_double_clicked)
         layout.addWidget(self.available_signals)
         
         # Add button to add signals
@@ -80,186 +81,390 @@ class AvailableSignalsPanel(QWidget):
         """Add selected signals to the graph view."""
         for item in self.available_signals.selectedItems():
             self.signal_added.emit(item.text())
+            
+    def on_item_double_clicked(self, item):
+        """Handle double-click on an available signal to add it."""
+        self.signal_added.emit(item.text())
 
 class SelectedSignalsPanel(QWidget):
-    """Panel showing selected signals that lines up with the plot and replaces y-axis labels."""
+    """Panel showing selected signals that lines up with the plot."""
     signal_removed = pyqtSignal(str)
+    signals_removed = pyqtSignal(list)  # New signal for batch removal
     signals_reordered = pyqtSignal(list)
     
     def __init__(self, parent=None):
         super().__init__(parent)
+        
+        # Create the overall layout with the same margins as AvailableSignalsPanel
+        layout = QVBoxLayout(self)
+        
+        # Create title label with the same styling as AvailableSignalsPanel
+        self.title_label = QLabel("Selected Signals")
+        self.title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.title_label)
+        
+        # Create a custom widget to display signals aligned with plot
+        self.signals_container = QWidget()
+        self.signals_container.setMouseTracking(True)
+        self.signals_scroll = QScrollArea()
+        self.signals_scroll.setWidget(self.signals_container)
+        self.signals_scroll.setWidgetResizable(True)
+        self.signals_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.signals_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        layout.addWidget(self.signals_scroll)
+        
+        # Signal list and interaction properties
         self.signals = []
-        self.vertical_spacing = 50
-        self.signal_height = 30
-        self.top_margin = 50
-        self.setMinimumWidth(120)
-        
-        # For signal interaction
-        self.dragging_label = None
+        self.vertical_spacing = 30  # Match GraphView's vertical_spacing
+        self.top_margin = 20  # Reduced from 50 to eliminate extra space at top
+        self.signal_height = 22
+        self.dragging_index = -1
         self.drag_start_pos = None
-        self.drag_current_index = -1
-        self.label_rects = {}  # Maps variable names to their label rectangles
+        self.last_click_time = 0  # To track double clicks
+        self.last_click_pos = None
         
-        # Enable mouse tracking and focus
-        self.setMouseTracking(True)
-        self.setFocusPolicy(Qt.StrongFocus)
+        # For multi-selection
+        self.selected_signals = []  # Indices of selected signals
+        self.selection_start_pos = None  # For tracking selection box
+        self.is_selecting = False
+        
+        # Enable drag and drop
+        self.signals_container.setAcceptDrops(True)
+        
+        # Set size policy
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        
+        # Connect signals to handle interactions
+        self.signals_container.installEventFilter(self)
         
     def set_signals(self, signals):
         """Set the list of signals to display."""
         self.signals = signals.copy()
-        self.update_label_positions()
-        self.update()
+        self.selected_signals = []  # Clear selection when signals change
+        self.update_container_size()
+        self.signals_container.update()
         
     def add_signal(self, signal_name):
         """Add a signal to the panel."""
         if signal_name not in self.signals:
             self.signals.append(signal_name)
-            self.update_label_positions()
-            self.update()
+            self.update_container_size()
+            self.signals_container.update()
             
     def remove_signal(self, signal_name):
         """Remove a signal from the panel."""
         if signal_name in self.signals:
             self.signals.remove(signal_name)
-            self.update_label_positions()
-            self.update()
+            self.selected_signals = []  # Clear selection after removal
+            self.update_container_size()
+            self.signals_container.update()
             self.signal_removed.emit(signal_name)
+    
+    def remove_selected_signals(self):
+        """Remove all selected signals."""
+        if not self.selected_signals:
+            return
             
-    def update_label_positions(self):
-        """Update the positions of signal labels."""
-        self.label_rects = {}
-        for i, signal in enumerate(self.signals):
-            y_pos = i * self.vertical_spacing + self.top_margin
-            self.label_rects[signal] = QRectF(5, y_pos - self.signal_height/2, 
-                                             self.width() - 10, self.signal_height)
-            
-    def move_signal(self, from_index, to_index):
-        """Move a signal from one position to another."""
-        if 0 <= from_index < len(self.signals) and 0 <= to_index < len(self.signals):
-            signal = self.signals[from_index]
-            self.signals.pop(from_index)
-            self.signals.insert(to_index, signal)
-            self.update_label_positions()
-            self.update()
-            self.signals_reordered.emit(self.signals)
-            
-    def get_signal_at_position(self, pos):
-        """Get the signal at the given position, or None if none is found."""
-        for signal, rect in self.label_rects.items():
-            if rect.contains(pos):
-                return signal
-        return None
+        # Sort in reverse order to remove from highest index to lowest
+        indices_to_remove = sorted(self.selected_signals, reverse=True)
+        signals_to_remove = [self.signals[i] for i in indices_to_remove]
         
-    def get_signal_index(self, signal):
-        """Get the index of a signal in the list."""
-        if signal in self.signals:
-            return self.signals.index(signal)
-        return -1
+        # Remove signals from the list
+        for index in indices_to_remove:
+            del self.signals[index]
+            
+        # Clear selection
+        self.selected_signals = []
         
-    def get_signal_index_at_y(self, y):
-        """Get the index of the signal at or nearest to the given y-coordinate."""
+        # Update UI
+        self.update_container_size()
+        self.signals_container.update()
+        
+        # Emit signal for batch removal
+        self.signals_removed.emit(signals_to_remove)
+    
+    def update_container_size(self):
+        """Update the size of the signals container based on signals."""
         if not self.signals:
-            return 0
-            
-        # Calculate the estimated index based on y position
-        estimated_index = int((y - self.top_margin) / self.vertical_spacing + 0.5)
-        
-        # Ensure the index is within bounds
-        estimated_index = max(0, min(estimated_index, len(self.signals) - 1))
-        
-        return estimated_index
-        
-    def resizeEvent(self, event):
-        """Handle resize events to update label positions."""
-        self.update_label_positions()
-        super().resizeEvent(event)
-        
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            signal = self.get_signal_at_position(event.pos())
-            if signal:
-                self.dragging_label = signal
-                self.drag_start_pos = event.pos()
-                self.drag_current_index = self.get_signal_index(signal)
-                self.update()
-        elif event.button() == Qt.RightButton:
-            # Context menu for labels
-            signal = self.get_signal_at_position(event.pos())
-            if signal:
-                menu = QMenu(self)
-                remove_action = menu.addAction("Remove Signal")
-                action = menu.exec_(self.mapToGlobal(event.pos()))
-                
-                if action == remove_action:
-                    self.remove_signal(signal)
+            self.signals_container.setMinimumHeight(100)  # Minimum height for empty state
+        else:
+            # Set height to accommodate all signals with proper spacing
+            total_height = self.top_margin + len(self.signals) * self.vertical_spacing
+            self.signals_container.setMinimumHeight(total_height)
     
-    def mouseMoveEvent(self, event):
-        if self.dragging_label and event.buttons() & Qt.LeftButton:
-            if (event.pos() - self.drag_start_pos).manhattanLength() > 10:
-                # Update position during drag
-                target_index = self.get_signal_index_at_y(event.pos().y())
+    def eventFilter(self, obj, event):
+        """Handle mouse events for the signals container."""
+        if obj == self.signals_container:
+            if event.type() == QEvent.Paint:
+                self.paint_signals()
+                return True
+            elif event.type() == QEvent.MouseButtonPress:
+                return self.handle_mouse_press(event)
+            elif event.type() == QEvent.MouseMove:
+                return self.handle_mouse_move(event)
+            elif event.type() == QEvent.MouseButtonRelease:
+                return self.handle_mouse_release(event)
+            elif event.type() == QEvent.DragEnter:
+                return self.handle_drag_enter(event)
+            elif event.type() == QEvent.Drop:
+                return self.handle_drop(event)
                 
-                # Only update if moving to a different position
-                if target_index != self.drag_current_index and target_index >= 0:
-                    self.move_signal(self.drag_current_index, target_index)
-                    self.drag_current_index = target_index
-            self.update()
+        return super().eventFilter(obj, event)
     
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self.dragging_label:
-            self.dragging_label = None
-            self.drag_start_pos = None
-            self.update()
-            
-    def paintEvent(self, event):
-        painter = QPainter(self)
+    def paint_signals(self):
+        """Paint the signals on the container."""
+        painter = QPainter(self.signals_container)
         painter.setRenderHint(QPainter.Antialiasing)
         
-        try:
-            # Draw background
-            painter.fillRect(self.rect(), QColor(240, 240, 240))
+        # Draw background
+        painter.fillRect(self.signals_container.rect(), QColor(240, 240, 240))
+        
+        # If no signals, draw a message
+        if not self.signals:
+            message_rect = QRectF(10, 50, self.width() - 20, 60)
+            painter.setPen(QPen(QColor(100, 100, 100)))
+            painter.drawText(message_rect, Qt.AlignCenter, 
+                            "No signals selected\nAdd signals from\nAvailable Signals panel")
+            return
+        
+        # Draw selection box if selecting
+        if self.is_selecting and self.selection_start_pos:
+            selection_rect = QRectF(
+                min(self.selection_start_pos.x(), self.selection_current_pos.x()), 
+                min(self.selection_start_pos.y(), self.selection_current_pos.y()),
+                abs(self.selection_current_pos.x() - self.selection_start_pos.x()),
+                abs(self.selection_current_pos.y() - self.selection_start_pos.y())
+            )
+            painter.fillRect(selection_rect, QColor(0, 120, 215, 40))  # Semi-transparent selection
+            painter.setPen(QPen(QColor(0, 120, 215), 1))
+            painter.drawRect(selection_rect)
+        
+        # Draw each signal
+        for i, signal in enumerate(self.signals):
+            y_pos = self.top_margin + i * self.vertical_spacing
+            rect = QRectF(5, y_pos - self.signal_height/2, 
+                         self.signals_container.width() - 10, self.signal_height)
             
-            # Draw a title for the panel
-            title_rect = QRectF(0, 5, self.width(), 30)
+            # Fill background
+            if i == self.dragging_index:
+                # Highlight when dragging
+                painter.fillRect(rect, QColor(200, 220, 255))
+            elif i in self.selected_signals:
+                # Highlight when selected
+                painter.fillRect(rect, QColor(210, 230, 255))
+            else:
+                # Normal background
+                painter.fillRect(rect, QColor(240, 240, 240))
+            
+            # Draw border
+            painter.setPen(QPen(QColor(180, 180, 180), 1))
+            painter.drawRect(rect)
+            
+            # Draw signal name
             painter.setPen(QPen(QColor(0, 0, 0), 1))
-            painter.setFont(QFont("Arial", 10, QFont.Bold))
-            painter.drawText(title_rect, Qt.AlignCenter, "Selected Signals")
+            text_rect = rect.adjusted(5, 0, -5, 0)  # Text margin
+            painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, signal)
             
-            if not self.signals:
-                # Draw a message if no signals are selected
-                message_rect = QRectF(0, self.height()/2 - 30, self.width(), 60)
-                painter.setPen(QPen(QColor(100, 100, 100), 1))
-                painter.drawText(message_rect, Qt.AlignCenter, 
-                                "No signals selected\nAdd signals from\nAvailable Signals panel")
-                return
+        # Draw horizontal guide lines for alignment reference
+        painter.setPen(QPen(QColor(220, 220, 220), 1, Qt.DotLine))
+        for i in range(len(self.signals)):
+            y_pos = self.top_margin + i * self.vertical_spacing
+            painter.drawLine(0, y_pos, self.signals_container.width(), y_pos)
+    
+    def get_signal_index_at_pos(self, pos):
+        """Get the index of the signal at the given position."""
+        if not self.signals:
+            return -1
+            
+        # Check if position is within signal display area
+        if pos.y() < self.top_margin - self.signal_height/2:
+            return -1
+            
+        # Calculate index based on y position
+        index = int((pos.y() - self.top_margin + self.signal_height/2) / self.vertical_spacing)
+        if 0 <= index < len(self.signals):
+            return index
+        return -1
+    
+    def handle_mouse_press(self, event):
+        """Handle mouse press events."""
+        if event.button() == Qt.LeftButton:
+            # Check for double click
+            current_time = event.timestamp()
+            double_click_interval = QApplication.doubleClickInterval()
+            
+            if (self.last_click_pos is not None and 
+                (current_time - self.last_click_time) < double_click_interval and
+                (event.pos() - self.last_click_pos).manhattanLength() < 5):
                 
-            painter.setFont(QFont("Arial", 10))
+                # This is a double click
+                index = self.get_signal_index_at_pos(event.pos())
+                if index >= 0:
+                    self.remove_signal(self.signals[index])
+                    return True
             
-            # Draw divider lines between signal names
-            painter.setPen(QPen(QColor(200, 200, 200), 1))
-            for i in range(1, len(self.signals)):
-                y = i * self.vertical_spacing + self.top_margin - self.signal_height/2
-                painter.drawLine(QLineF(0, y, self.width(), y))
+            # Update click time and position for potential future double click
+            self.last_click_time = current_time
+            self.last_click_pos = event.pos()
             
-            # Draw each signal label
-            for signal, rect in self.label_rects.items():
-                # Draw label background
-                if self.dragging_label == signal:
-                    # Highlight when dragging
-                    painter.fillRect(rect, QColor(200, 220, 255, 245))
+            # Get the index at click position
+            index = self.get_signal_index_at_pos(event.pos())
+            
+            # Handling selection or dragging
+            if index >= 0:
+                # Check if Ctrl is pressed for multi-selection
+                if event.modifiers() & Qt.ControlModifier:
+                    # Toggle selection of the clicked item
+                    if index in self.selected_signals:
+                        self.selected_signals.remove(index)
+                    else:
+                        self.selected_signals.append(index)
+                    self.signals_container.update()
+                elif event.modifiers() & Qt.ShiftModifier and self.selected_signals:
+                    # Range selection with Shift
+                    if self.selected_signals:
+                        # Get the last selected item
+                        last_selected = self.selected_signals[-1]
+                        # Select all items between last selected and current
+                        start, end = sorted([last_selected, index])
+                        self.selected_signals = list(set(self.selected_signals + list(range(start, end + 1))))
+                        self.signals_container.update()
                 else:
-                    # Normal background
-                    painter.fillRect(rect, QColor(240, 240, 240, 245))
+                    # Normal click - start dragging and clear previous selection
+                    self.dragging_index = index
+                    self.drag_start_pos = event.pos()
+                    # Select only this item
+                    self.selected_signals = [index]
+                    self.signals_container.update()
+            else:
+                # Click in empty area - start selection box
+                self.selection_start_pos = event.pos()
+                self.selection_current_pos = event.pos()
+                self.is_selecting = True
+                # Clear selection if Ctrl is not pressed
+                if not (event.modifiers() & Qt.ControlModifier):
+                    self.selected_signals = []
+                self.signals_container.update()
+            
+            return True
+            
+        elif event.button() == Qt.RightButton:
+            # Show context menu for single item or selection
+            index = self.get_signal_index_at_pos(event.pos())
+            
+            if index >= 0 and index not in self.selected_signals:
+                # Right-click on non-selected item - select only this item
+                self.selected_signals = [index]
+                self.signals_container.update()
+            
+            if self.selected_signals:
+                # Show context menu for selection
+                menu = QMenu(self)
                 
-                # Draw label border
-                painter.setPen(QPen(QColor(120, 120, 120), 1))
-                painter.drawRect(rect)
+                if len(self.selected_signals) == 1:
+                    signal_name = self.signals[self.selected_signals[0]]
+                    remove_action = menu.addAction(f"Remove Signal '{signal_name}'")
+                else:
+                    remove_action = menu.addAction(f"Remove {len(self.selected_signals)} Selected Signals")
                 
-                # Draw signal name
-                painter.setPen(QPen(QColor(0, 0, 0), 1))
-                painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, " " + signal)
-        finally:
-            painter.end()
+                action = menu.exec_(self.signals_container.mapToGlobal(event.pos()))
+                if action == remove_action:
+                    self.remove_selected_signals()
+                
+                return True
+        
+        return False
+    
+    def handle_mouse_move(self, event):
+        """Handle mouse move events."""
+        if self.dragging_index >= 0 and event.buttons() & Qt.LeftButton:
+            # Determine target position for drag
+            target_index = self.get_signal_index_at_pos(event.pos())
+            if target_index >= 0 and target_index != self.dragging_index:
+                # Move signal to new position
+                signal = self.signals.pop(self.dragging_index)
+                self.signals.insert(target_index, signal)
+                
+                # Update selected signals indices
+                self.selected_signals = [i if i < self.dragging_index else i - 1 for i in self.selected_signals if i != self.dragging_index]
+                self.selected_signals.append(target_index)
+                
+                self.dragging_index = target_index
+                self.signals_container.update()
+                self.signals_reordered.emit(self.signals)
+            return True
+        
+        elif self.is_selecting:
+            # Update selection box
+            self.selection_current_pos = event.pos()
+            
+            # Update selected signals based on selection box
+            selection_rect = QRectF(
+                min(self.selection_start_pos.x(), self.selection_current_pos.x()), 
+                min(self.selection_start_pos.y(), self.selection_current_pos.y()),
+                abs(self.selection_current_pos.x() - self.selection_start_pos.x()),
+                abs(self.selection_current_pos.y() - self.selection_start_pos.y())
+            )
+            
+            # Determine which signals are in the selection rectangle
+            new_selected = []
+            for i, signal in enumerate(self.signals):
+                y_pos = self.top_margin + i * self.vertical_spacing
+                signal_rect = QRectF(5, y_pos - self.signal_height/2, 
+                                    self.signals_container.width() - 10, self.signal_height)
+                
+                if selection_rect.intersects(signal_rect):
+                    new_selected.append(i)
+            
+            # Update selection if changed
+            if set(new_selected) != set(self.selected_signals):
+                if event.modifiers() & Qt.ControlModifier:
+                    # Toggle selection for items in box
+                    for i in new_selected:
+                        if i not in self.selected_signals:
+                            self.selected_signals.append(i)
+                else:
+                    # Replace selection
+                    self.selected_signals = new_selected
+                
+                self.signals_container.update()
+            
+            return True
+        
+        return False
+    
+    def handle_mouse_release(self, event):
+        """Handle mouse release events."""
+        if event.button() == Qt.LeftButton:
+            if self.dragging_index >= 0:
+                self.dragging_index = -1
+                self.drag_start_pos = None
+                self.signals_container.update()
+                return True
+                
+            if self.is_selecting:
+                self.is_selecting = False
+                self.selection_start_pos = None
+                self.signals_container.update()
+                return True
+        
+        return False
+    
+    def handle_drag_enter(self, event):
+        """Handle drag enter events."""
+        if event.mimeData().hasText():
+            event.acceptProposedAction()
+            return True
+        return False
+    
+    def handle_drop(self, event):
+        """Handle drop events."""
+        if event.mimeData().hasText():
+            signal_name = event.mimeData().text()
+            self.add_signal(signal_name)
+            event.acceptProposedAction()
+            return True
+        return False
 
 class GraphView(QWidget):
     """Widget for rendering the event-rule graph with interactive signal labels."""
@@ -272,8 +477,9 @@ class GraphView(QWidget):
         self.scale = 1.0
         self.min_scale = 0.001
         self.max_scale = 10.0
-        self.vertical_spacing = 50
-        self.horizontal_margin = 50  # Reduced since signal names are now in a separate panel
+        self.vertical_spacing = 30  # Reduced spacing between signals
+        self.top_margin = 53  # Increased from 47 to move plot down by another ~1.5mm
+        self.horizontal_margin = 50
         self.node_radius = 5
         self.setMinimumSize(600, 400)
         
@@ -346,7 +552,7 @@ class GraphView(QWidget):
         
         # Map for original and normalized variable names
         for i, var in enumerate(self.display_variables):
-            y_pos = i * self.vertical_spacing + 50
+            y_pos = i * self.vertical_spacing + self.top_margin  # Use top_margin to align with signals panel
             self.variable_y_positions[var] = y_pos
             
             # Also map variables that normalize to this var
@@ -678,6 +884,20 @@ class GraphView(QWidget):
             self.add_variable(signal_name)
             event.acceptProposedAction()
 
+    def mouseDoubleClickEvent(self, event):
+        """Handle double-click to remove variables at a specific position."""
+        if not self.graph or not self.display_variables:
+            return
+            
+        # Find the closest variable to the click position
+        for var, y_pos in self.variable_y_positions.items():
+            if abs(event.pos().y() - y_pos) < 15:  # Within reasonable range of line
+                if var in self.display_variables:
+                    self.remove_variable(var)
+                    break
+                    
+        event.accept()
+
 class SimFileParser:
     """Parser for .sim files containing event-rule data."""
     
@@ -892,7 +1112,10 @@ class MainWindow(QMainWindow):
         
         # Create the selected signals panel (replaces y-axis labels)
         self.selected_signals_panel = SelectedSignalsPanel()
+        # Set similar margins to match available signals panel
+        self.selected_signals_panel.layout().setContentsMargins(9, 9, 9, 9)
         self.selected_signals_panel.signal_removed.connect(self.remove_signal)
+        self.selected_signals_panel.signals_removed.connect(self.remove_signals)  # Connect new signal
         self.selected_signals_panel.signals_reordered.connect(self.reorder_signals)
         self.selected_signals_panel.setMinimumWidth(100)
         self.selected_signals_panel.setMaximumWidth(200)
@@ -923,7 +1146,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(self.file_label)
         
         # Add help text to the status bar
-        self.hint_label = QLabel(" | Right-click signal labels to remove | Drag signal labels to reorder | Drag splitter handles to resize panels")
+        self.hint_label = QLabel(" | Drag signals to add or reorder | Ctrl+Click or draw box to multi-select | Right-click to remove selected signal(s)")
         self.statusBar().addWidget(self.hint_label)
         
         # Track the currently loaded graph
@@ -958,6 +1181,11 @@ class MainWindow(QMainWindow):
     def remove_signal(self, signal_name):
         """Remove a signal from the graph view."""
         self.graph_view.remove_variable(signal_name)
+        
+    def remove_signals(self, signal_names):
+        """Remove multiple signals from the graph view."""
+        for signal_name in signal_names:
+            self.graph_view.remove_variable(signal_name)
         
     def reorder_signals(self, signals):
         """Update the graph view with the new signal order."""
