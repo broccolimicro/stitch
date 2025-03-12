@@ -317,6 +317,9 @@ class GraphView(QWidget):
                     
                 visible_transitions.append(transition)
             
+            # Build a dictionary of visible transitions for quick lookup
+            visible_transitions_dict = {id(t): t for t in visible_transitions}
+            
             # Draw horizontal guide lines (behind nodes and arcs)
             painter.setPen(QPen(QColor(200, 200, 200), 1, Qt.DashLine))
             for var in self.display_variables:
@@ -349,12 +352,29 @@ class GraphView(QWidget):
                 text_pos = QPointF(x + self.node_radius + 2, y - self.node_radius - 2)
                 painter.drawText(text_pos, label)
             
-            # Second pass: Draw the links/arrows only for visible transitions
-            for transition in visible_transitions:
+            # Second pass: Draw links/arrows if either end is visible
+            # Process all transitions rather than just visible ones
+            for transition in self.graph.transitions:
+                # Skip if variable is not in displayed list (normalized form)
+                norm_var = SimFileParser.normalize_variable(transition.variable)
+                if norm_var not in self.display_variables:
+                    continue
+                    
+                # Skip if variable position is not defined
+                if transition.variable not in self.variable_y_positions:
+                    continue
+                
+                # Check if this transition is visible
+                target_visible = (min_visible_time <= transition.time <= max_visible_time)
+                if not target_visible and id(transition) not in visible_transitions_dict:
+                    # If target is not visible, we'll check each source later
+                    pass
+                    
+                # Get target coordinates even if not visible
                 x = self.time_to_x(transition.time)
                 y = self.variable_y_positions[transition.variable]
                 
-                # Draw incoming links (causal dependencies) only if source is displayed and visible
+                # Draw incoming links (causal dependencies)
                 for source in transition.incoming_links:
                     source_norm_var = SimFileParser.normalize_variable(source.variable)
                     if source_norm_var not in self.display_variables:
@@ -363,8 +383,11 @@ class GraphView(QWidget):
                     if source.variable not in self.variable_y_positions:
                         continue
                     
-                    # Skip links from transitions outside of the visible range
-                    if source.time < min_visible_time:
+                    # Check if source is visible
+                    source_visible = (min_visible_time <= source.time <= max_visible_time)
+                    
+                    # Skip if both source and target are invisible
+                    if not source_visible and not target_visible:
                         continue
                     
                     src_x = self.time_to_x(source.time)
@@ -389,26 +412,27 @@ class GraphView(QWidget):
                     # Draw the path (curve only)
                     painter.drawPath(path)
                     
-                    # Draw arrowhead
-                    arrow_size = 6
-                    
-                    # Calculate the direction vector at the endpoint
-                    dx = x - ctrl2_x
-                    dy = y - ctrl2_y
-                    length = (dx**2 + dy**2)**0.5
-                    if length > 0:
-                        dx, dy = dx/length, dy/length
+                    # Draw arrowhead if target is visible
+                    if target_visible:
+                        arrow_size = 6
                         
-                        # Calculate arrowhead points
-                        p1 = QPointF(x - arrow_size * (dx * 0.866 - dy * 0.5), 
-                                     y - arrow_size * (dy * 0.866 + dx * 0.5))
-                        p2 = QPointF(x - arrow_size * (dx * 0.866 + dy * 0.5), 
-                                     y - arrow_size * (dy * 0.866 - dx * 0.5))
-                        
-                        # Draw arrowhead with fill
-                        painter.setBrush(QBrush(QColor(0, 0, 200)))
-                        points = [QPointF(x, y), p1, p2]
-                        painter.drawPolygon(points)
+                        # Calculate the direction vector at the endpoint
+                        dx = x - ctrl2_x
+                        dy = y - ctrl2_y
+                        length = (dx**2 + dy**2)**0.5
+                        if length > 0:
+                            dx, dy = dx/length, dy/length
+                            
+                            # Calculate arrowhead points
+                            p1 = QPointF(x - arrow_size * (dx * 0.866 - dy * 0.5), 
+                                        y - arrow_size * (dy * 0.866 + dx * 0.5))
+                            p2 = QPointF(x - arrow_size * (dx * 0.866 + dy * 0.5), 
+                                        y - arrow_size * (dy * 0.866 - dx * 0.5))
+                            
+                            # Draw arrowhead with fill
+                            painter.setBrush(QBrush(QColor(0, 0, 200)))
+                            points = [QPointF(x, y), p1, p2]
+                            painter.drawPolygon(points)
                 
                 # Draw assumption links with a different color
                 for source in transition.assumption_links:
@@ -419,8 +443,11 @@ class GraphView(QWidget):
                     if source.variable not in self.variable_y_positions:
                         continue
                     
-                    # Skip links from transitions outside of the visible range
-                    if source.time < min_visible_time:
+                    # Check if source is visible
+                    source_visible = (min_visible_time <= source.time <= max_visible_time)
+                    
+                    # Skip if both source and target are invisible
+                    if not source_visible and not target_visible:
                         continue
                     
                     src_x = self.time_to_x(source.time)
@@ -443,24 +470,25 @@ class GraphView(QWidget):
                     # Draw the path (curve only)
                     painter.drawPath(path)
                     
-                    # Draw arrowhead
-                    arrow_size = 6
-                    
-                    dx = x - ctrl2_x
-                    dy = y - ctrl2_y
-                    length = (dx**2 + dy**2)**0.5
-                    if length > 0:
-                        dx, dy = dx/length, dy/length
+                    # Draw arrowhead if target is visible
+                    if target_visible:
+                        arrow_size = 6
                         
-                        p1 = QPointF(x - arrow_size * (dx * 0.866 - dy * 0.5), 
-                                     y - arrow_size * (dy * 0.866 + dx * 0.5))
-                        p2 = QPointF(x - arrow_size * (dx * 0.866 + dy * 0.5), 
-                                     y - arrow_size * (dy * 0.866 - dx * 0.5))
-                        
-                        # Draw arrowhead with fill
-                        painter.setBrush(QBrush(QColor(200, 100, 0)))
-                        points = [QPointF(x, y), p1, p2]
-                        painter.drawPolygon(points)
+                        dx = x - ctrl2_x
+                        dy = y - ctrl2_y
+                        length = (dx**2 + dy**2)**0.5
+                        if length > 0:
+                            dx, dy = dx/length, dy/length
+                            
+                            p1 = QPointF(x - arrow_size * (dx * 0.866 - dy * 0.5), 
+                                        y - arrow_size * (dy * 0.866 + dx * 0.5))
+                            p2 = QPointF(x - arrow_size * (dx * 0.866 + dy * 0.5), 
+                                        y - arrow_size * (dy * 0.866 - dx * 0.5))
+                            
+                            # Draw arrowhead with fill
+                            painter.setBrush(QBrush(QColor(200, 100, 0)))
+                            points = [QPointF(x, y), p1, p2]
+                            painter.drawPolygon(points)
             
             # Draw Y-axis signal labels as a single continuous block
             if self.display_variables:
