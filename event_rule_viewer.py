@@ -65,12 +65,10 @@ class AvailableSignalsPanel(QWidget):
         self.available_signals.itemDoubleClicked.connect(self.on_item_double_clicked)
         # Setup drag behavior to include correct mime data format
         self.available_signals.setDragDropMode(QAbstractItemView.DragOnly)
+        # Enable context menu
+        self.available_signals.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.available_signals.customContextMenuRequested.connect(self.show_context_menu)
         layout.addWidget(self.available_signals)
-        
-        # Add button to add signals
-        add_button = QPushButton("Add Selected Signal(s)")
-        add_button.clicked.connect(self.add_selected_signals)
-        layout.addWidget(add_button)
         
         # Set size policy - Fix: use QSizePolicy instead of QSplitter.Policy
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
@@ -279,6 +277,35 @@ class AvailableSignalsPanel(QWidget):
             self.refresh_list()
             # Clean up the backup
             del self._protected_selected_signals
+
+    def show_context_menu(self, position):
+        """Show context menu for the available signals list."""
+        selected_items = self.available_signals.selectedItems()
+        
+        if not selected_items:
+            return
+            
+        menu = QMenu(self)
+        
+        # Create an action for adding the selected signals
+        if len(selected_items) > 1:
+            add_action = menu.addAction(f"Add {len(selected_items)} Selected Signals to Graph")
+        else:
+            signal_name = selected_items[0].text()
+            add_action = menu.addAction(f"Add '{signal_name}' to Graph")
+            
+        # Create a separator and add "Select All" action
+        menu.addSeparator()
+        select_all_action = menu.addAction("Select All")
+        
+        # Show the context menu at the cursor position
+        action = menu.exec_(self.available_signals.mapToGlobal(position))
+        
+        # Handle the selected action
+        if action == add_action:
+            self.add_selected_signals()
+        elif action == select_all_action:
+            self.available_signals.selectAll()
 
 class SelectedSignalsPanel(QWidget):
     """Panel showing selected signals that lines up with the plot."""
