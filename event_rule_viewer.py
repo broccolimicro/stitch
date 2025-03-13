@@ -553,28 +553,119 @@ class GraphView(QWidget):
         
     def set_normalized_timing(self, enabled):
         """Toggle between true timing and normalized timing."""
-        if self.normalized_timing != enabled:
+        if self.normalized_timing == enabled:
+            # No change needed
+            return
+            
+        # Store current viewport information before switching
+        visible_min_time = self.x_to_time(0)
+        visible_max_time = self.x_to_time(self.width())
+        visible_center = (visible_min_time + visible_max_time) / 2
+        visible_range = visible_max_time - visible_min_time
+        
+        # Prepare for conversion
+        if self.graph and self.graph.transitions:
+            # Ensure we have the latest mapping
+            if enabled and (not self.normalized_times or not self.time_mapping):
+                self.setup_normalized_times()
+                
+            # Build reverse mapping if needed and not already present
+            if not hasattr(self, 'reverse_time_mapping') or not self.reverse_time_mapping:
+                self.reverse_time_mapping = {}
+                for orig, norm in self.time_mapping.items():
+                    self.reverse_time_mapping[norm] = orig
+        
+            # Calculate the new center position
+            if self.normalized_timing and not enabled:
+                # Switching from normalized to true timing
+                # Find events that straddle the current center
+                center_true_time = self.get_original_time(visible_center)
+                new_center = center_true_time
+            elif not self.normalized_timing and enabled:
+                # Switching from true to normalized timing
+                # Map the center time to normalized time
+                center_normalized_time = self.get_displayed_time(visible_center)
+                new_center = center_normalized_time
+            else:
+                # Fallback - stay centered on the same position
+                new_center = visible_center
+                
+            # Switch the mode
             self.normalized_timing = enabled
             
-            if self.graph and self.graph.transitions:
-                if enabled:
-                    # Switch to normalized timing
-                    self.setup_normalized_times()
-                    # Start with a view of the entire timeline
+            # Calculate appropriate scale to maintain similar view area
+            if enabled:
+                # True → Normalized: Calculate a scale that shows a similar number of events
+                if len(self.original_times) > 1:
+                    # Normalized time uses fixed 500ps intervals
+                    new_time_range = visible_range * (500 / self.get_avg_time_interval())
+                    new_scale = self.width() / new_time_range
+                else:
+                    new_scale = self.scale
+            else:
+                # Normalized → True: Calculate a scale that shows a similar number of events
+                if len(self.original_times) > 1:
+                    # Calculate how many events were visible and maintain that
+                    new_time_range = visible_range * (self.get_avg_time_interval() / 500)
+                    new_scale = self.width() / new_time_range
+                else:
+                    new_scale = self.scale
+            
+            # Apply bounds to scale
+            new_scale = max(self.min_scale, min(self.max_scale, new_scale))
+            
+            # Ensure we're not at exactly 0 scale, which would cause divide-by-zero errors
+            if new_scale <= 0:
+                new_scale = self.min_scale
+            
+            self.scale = new_scale
+            
+            # Set the offset to center the view
+            self.offset_x = (self.width() / 2) - (new_center * self.scale)
+            
+            # Quick sanity check - ensure the offset isn't causing the view to go off-screen
+            min_time, max_time = 0, 1
+            if self.graph:
+                if self.normalized_timing:
+                    min_time = 0
+                    max_time = max(500, (len(self.original_times) - 1) * 500)
+                else:
+                    min_time, max_time = self.graph.get_min_max_time()
+            
+            # If the view is completely empty, reset to show everything
+            left_time = self.x_to_time(0)
+            right_time = self.x_to_time(self.width())
+            
+            if right_time <= min_time or left_time >= max_time:
+                # View is off the timeline, reset
+                if self.normalized_timing:
                     self.zoom_to_full_timeline()
                 else:
-                    # Switch back to true timing
-                    # Reset the view to show a reasonable portion of events
                     self.zoom_to_initial_events()
-                    
-            self.update()
-            
+        else:
+            # No graph loaded, just toggle the state
+            self.normalized_timing = enabled
+        
+        # Ensure the display is updated
+        self.update()
+        
+    def get_avg_time_interval(self):
+        """Calculate the average time interval between transitions in original time."""
+        if not self.original_times or len(self.original_times) < 2:
+            return 1
+        return (self.original_times[-1] - self.original_times[0]) / (len(self.original_times) - 1)
+    
     def setup_normalized_times(self):
         """Create a mapping from original times to normalized (evenly-spaced) times."""
         if not self.graph or not self.graph.transitions:
+            # Create empty mappings to avoid errors
+            self.original_times = []
+            self.normalized_times = []
+            self.time_mapping = {}
+            self.reverse_time_mapping = {}
             return
             
-        # Get all unique times from transitions
+        # Get all unique times from transitions and sort them
         self.original_times = sorted(set(t.time for t in self.graph.transitions))
         
         # Create normalized times with fixed 500ps spacing
@@ -582,11 +673,53 @@ class GraphView(QWidget):
         
         # Create mapping from original to normalized times
         self.time_mapping = dict(zip(self.original_times, self.normalized_times))
+        
+        # Create reverse mapping (normalized to original)
+        self.reverse_time_mapping = {}
+        for orig, norm in self.time_mapping.items():
+            self.reverse_time_mapping[norm] = orig
+        
+        # Debug validation - verify all mappings exist
+        print(f"Created time mappings with {len(self.original_times)} points")
+        if len(self.time_mapping) != len(self.original_times):
+            print(f"Warning: time_mapping size ({len(self.time_mapping)}) doesn't match original_times size ({len(self.original_times)})")
+        if len(self.reverse_time_mapping) != len(self.normalized_times):
+            print(f"Warning: reverse_time_mapping size ({len(self.reverse_time_mapping)}) doesn't match normalized_times size ({len(self.normalized_times)})")
             
     def get_displayed_time(self, time):
         """Get the time value to display, either true or normalized."""
-        if self.normalized_timing and time in self.time_mapping:
-            return self.time_mapping[time]
+        if self.normalized_timing:
+            # Direct lookup if the time is in the mapping
+            if time in self.time_mapping:
+                return self.time_mapping[time]
+            
+            # For times not exactly at a transition, interpolate
+            if self.original_times:
+                # Find the nearest original times before and after
+                times_before = [t for t in self.original_times if t <= time]
+                times_after = [t for t in self.original_times if t > time]
+                
+                if times_before and times_after:
+                    # Interpolate between the two nearest times
+                    t_before = max(times_before)
+                    t_after = min(times_after)
+                    
+                    # Get normalized values for these times
+                    norm_before = self.time_mapping[t_before]
+                    norm_after = self.time_mapping[t_after]
+                    
+                    # Calculate position as fraction between t_before and t_after
+                    fraction = (time - t_before) / (t_after - t_before)
+                    return norm_before + fraction * (norm_after - norm_before)
+                elif times_before:
+                    # After the last transition, extrapolate based on spacing
+                    t_before = max(times_before)
+                    return self.time_mapping[t_before] + (time - t_before) / 500 * 500
+                elif times_after:
+                    # Before the first transition, extrapolate based on spacing
+                    t_after = min(times_after)
+                    return self.time_mapping[t_after] - (t_after - time) / 500 * 500
+            
         return time
         
     def set_time_unit(self, unit):
@@ -735,8 +868,18 @@ class GraphView(QWidget):
     def x_to_time(self, x):
         """Convert an x-coordinate to a time value."""
         time = (x - self.offset_x) / self.scale
-        # Note: This doesn't convert back from normalized time to original time
-        # since it's primarily used for visualization calculations
+        return time
+        
+    def time_to_original(self, time):
+        """Convert any time (normalized or not) to original timeline time."""
+        if self.normalized_timing:
+            return self.get_original_time(time)
+        return time
+        
+    def original_to_display_time(self, time):
+        """Convert original time to display time (normalized or not)."""
+        if self.normalized_timing:
+            return self.get_displayed_time(time)
         return time
     
     def format_time(self, time):
@@ -1132,6 +1275,61 @@ class GraphView(QWidget):
                     break
                     
         event.accept()
+
+    def get_original_time(self, normalized_time):
+        """Map from normalized time back to original time."""
+        if not self.normalized_timing or not self.normalized_times:
+            return normalized_time
+            
+        # Create a reverse mapping dictionary if not already done
+        if not hasattr(self, 'reverse_time_mapping') or not self.reverse_time_mapping:
+            self.reverse_time_mapping = {}
+            for orig, norm in self.time_mapping.items():
+                self.reverse_time_mapping[norm] = orig
+        
+        # Direct lookup if the time is in the reverse mapping
+        if normalized_time in self.reverse_time_mapping:
+            return self.reverse_time_mapping[normalized_time]
+        
+        # For times not exactly at a normalized point, interpolate
+        if self.normalized_times:
+            # Find the nearest normalized times before and after
+            times_before = [t for t in self.normalized_times if t <= normalized_time]
+            times_after = [t for t in self.normalized_times if t > normalized_time]
+            
+            if times_before and times_after:
+                # Interpolate between the two nearest times
+                norm_before = max(times_before)
+                norm_after = min(times_after)
+                
+                # Get original values for these normalized times
+                if norm_before in self.reverse_time_mapping and norm_after in self.reverse_time_mapping:
+                    orig_before = self.reverse_time_mapping[norm_before]
+                    orig_after = self.reverse_time_mapping[norm_after]
+                    
+                    # Calculate position as fraction between norm_before and norm_after
+                    if norm_after > norm_before:  # Prevent division by zero
+                        fraction = (normalized_time - norm_before) / (norm_after - norm_before)
+                        return orig_before + fraction * (orig_after - orig_before)
+                
+            # If interpolation fails, try nearest neighbor approach
+            if times_before:
+                # After the last normalized point, use the last known time
+                norm_time = max(times_before)
+                if norm_time in self.reverse_time_mapping:
+                    return self.reverse_time_mapping[norm_time]
+            elif times_after:
+                # Before the first normalized point, use the first known time
+                norm_time = min(times_after)
+                if norm_time in self.reverse_time_mapping:
+                    return self.reverse_time_mapping[norm_time]
+                
+        # If all else fails, use the min time from the graph as a fallback
+        if self.graph:
+            min_time, _ = self.graph.get_min_max_time()
+            return min_time
+            
+        return normalized_time
 
 class SimFileParser:
     """Parser for .sim files containing event-rule data."""
