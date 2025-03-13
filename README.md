@@ -69,6 +69,3 @@ Example:
 - Blue arrows represent causal links
 - Orange dashed arrows represent timing assumptions
 
-## License
-
-MIT 
