@@ -1629,6 +1629,10 @@ class GraphView(QWidget):
                     # Get source display mode
                     source_mode = self.get_signal_display_mode(source_norm_var)
                     
+                    # Skip if source is in wave mode (waveforms don't have outgoing arrows)
+                    if source_mode == "wave":
+                        continue
+                        
                     # For wave signals, only draw arrows coming from event signals
                     if target_mode == "wave" and source_mode == "wave":
                         continue  # Skip arrows between wave signals
@@ -1646,11 +1650,9 @@ class GraphView(QWidget):
                     
                     # Adjust target y-position for wave signals based on state
                     if target_mode == "wave":
-                        # Determine the state at this transition
-                        is_high = transition.is_rising  # If rising, arrow points to low->high transition
-                        # For wave signals, we need to adjust the y coordinate
-                        # Position the arrowhead at the proper waveform level
-                        y = y - 8 if is_high else y + 8  # 8px offset for high/low
+                        # For wave transitions, always point arrows to the center
+                        # This replaces the previous logic that pointed to top or bottom
+                        y = self.variable_y_positions[transition.variable]  # Center y-position
                     
                     # Create a curved path for the arrow
                     path = QPainterPath()
@@ -1705,6 +1707,10 @@ class GraphView(QWidget):
                     # Get source display mode
                     source_mode = self.get_signal_display_mode(source_norm_var)
                     
+                    # Skip if source is in wave mode (waveforms don't have outgoing arrows)
+                    if source_mode == "wave":
+                        continue
+                    
                     # For wave signals, only draw arrows coming from event signals
                     if target_mode == "wave" and source_mode == "wave":
                         continue  # Skip arrows between wave signals
@@ -1722,14 +1728,15 @@ class GraphView(QWidget):
                     
                     # Adjust target y-position for wave signals based on state
                     if target_mode == "wave":
-                        # Determine the state at this transition
-                        is_high = transition.is_rising  # If rising, arrow points to low->high transition
-                        # For wave signals, we need to adjust the y coordinate
-                        y = y - 8 if is_high else y + 8  # 8px offset for high/low
+                        # For wave transitions, always point arrows to the center
+                        # This replaces the previous logic that pointed to top or bottom
+                        y = self.variable_y_positions[transition.variable]  # Center y-position
                     
+                    # Create a curved path for the arrow
                     path = QPainterPath()
                     path.moveTo(src_x, src_y)
                     
+                    # Calculate control points for the curve
                     ctrl1_x = src_x + (x - src_x) * 0.5
                     ctrl1_y = src_y
                     ctrl2_x = src_x + (x - src_x) * 0.5
