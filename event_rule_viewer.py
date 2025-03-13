@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QHBoxLayout, QFileDialog, QPushButton, QLabel, 
                            QSplitter, QListWidget, QListWidgetItem, QAbstractItemView,
                            QToolButton, QGroupBox, QScrollArea, QMenu, QSizePolicy, QComboBox)
-from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPainterPath, QCursor
+from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPainterPath, QCursor, QDrag
 from PyQt5.QtCore import Qt, QRectF, QPointF, QLineF, pyqtSignal, QMimeData, QEvent
 
 class Transition:
@@ -57,11 +57,14 @@ class AvailableSignalsPanel(QWidget):
         self.title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.title_label)
         
-        self.available_signals = QListWidget()
+        # Use a custom list widget that enhances drag operations
+        self.available_signals = DraggableListWidget()
         self.available_signals.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.available_signals.setDragEnabled(True)
         self.available_signals.setAcceptDrops(False)
         self.available_signals.itemDoubleClicked.connect(self.on_item_double_clicked)
+        # Setup drag behavior to include correct mime data format
+        self.available_signals.setDragDropMode(QAbstractItemView.DragOnly)
         layout.addWidget(self.available_signals)
         
         # Add button to add signals
@@ -80,6 +83,8 @@ class AvailableSignalsPanel(QWidget):
         """Set the list of available signals."""
         self.all_signals = sorted(signals)
         self.refresh_list()
+        print(f"Set available signals to {len(self.all_signals)} items")
+        self.debug_state()
             
     def add_selected_signals(self):
         """Add selected signals to the graph view."""
@@ -100,16 +105,59 @@ class AvailableSignalsPanel(QWidget):
     
     def hide_signal(self, signal_name):
         """Hide a signal from the available list when it's added to selected signals."""
+        print(f"Hiding signal from available list: {signal_name}")
         if signal_name in self.all_signals:
-            self.selected_signals.append(signal_name)
+            # Always add to selected_signals list if not already there
+            if signal_name not in self.selected_signals:
+                self.selected_signals.append(signal_name)
+                print(f"  - Added {signal_name} to selected_signals")
             self.refresh_list()
+            # Debug the state after refresh
+            self.debug_state()
     
     def hide_signals(self, signal_names):
         """Hide multiple signals at once from the available list."""
+        print(f"hide_signals called with: {signal_names}")
+        print(f"  Type of signal_names: {type(signal_names)}")
+        
+        # Make sure we have an actual list, not just a string
+        if isinstance(signal_names, str):
+            print(f"  Converting string to list: {signal_names}")
+            signal_names = [signal_names]
+        
+        # Print each signal with its type
+        for i, signal in enumerate(signal_names):
+            print(f"  Signal {i}: '{signal}' (type: {type(signal)})")
+            
+        print(f"Hiding {len(signal_names)} signals from available list: {signal_names}")
+        
+        # Process each signal
         for signal_name in signal_names:
-            if signal_name in self.all_signals and signal_name not in self.selected_signals:
-                self.selected_signals.append(signal_name)
+            # Strip whitespace in case there are trailing spaces
+            if isinstance(signal_name, str):
+                signal_name = signal_name.strip()
+                if not signal_name:
+                    print(f"  - Skipping empty signal name")
+                    continue
+                    
+                # Check if it's a valid signal name in our all_signals list
+                if signal_name in self.all_signals:
+                    # Always add to selected_signals regardless of whether it's already there
+                    if signal_name not in self.selected_signals:
+                        self.selected_signals.append(signal_name)
+                        print(f"  - Added {signal_name} to selected_signals")
+                    else:
+                        print(f"  - Signal {signal_name} already in selected_signals")
+                else:
+                    print(f"  - Warning: Signal {signal_name} not found in all_signals list")
+            else:
+                print(f"  - Error: Expected string but got {type(signal_name)}: {signal_name}")
+                
+        # Always refresh the list to ensure all selected signals are hidden
         self.refresh_list()
+        
+        # Debug the state after refresh
+        self.debug_state()
     
     def show_signal(self, signal_name):
         """Show a signal in the available list when it's removed from selected signals."""
@@ -119,10 +167,105 @@ class AvailableSignalsPanel(QWidget):
     
     def refresh_list(self):
         """Refresh the list to show only signals that aren't currently selected."""
+        print(f"Refreshing available signals list. {len(self.all_signals)} total, {len(self.selected_signals)} selected")
+        
+        # For debugging, print some of the selected signals
+        if self.selected_signals:
+            debug_sample = self.selected_signals[:min(5, len(self.selected_signals))]
+            print(f"  Sample of selected signals: {debug_sample}")
+            
+        # Clear the list widget first
         self.available_signals.clear()
+        
+        # Add only signals that aren't in the selected_signals list
+        added_count = 0
         for signal in self.all_signals:
             if signal not in self.selected_signals:
                 self.available_signals.addItem(signal)
+                added_count += 1
+        
+        print(f"  Added {added_count} signals to available list")
+        
+        # For extra verification - make sure each signal is either in the list or marked as selected
+        if added_count + len(self.selected_signals) != len(self.all_signals):
+            print(f"  WARNING: Signal count mismatch - available({added_count}) + selected({len(self.selected_signals)}) != all({len(self.all_signals)})")
+            # If there's a mismatch, let's double check each signal
+            for signal in self.all_signals:
+                found_in_available = False
+                for i in range(self.available_signals.count()):
+                    if self.available_signals.item(i).text() == signal:
+                        found_in_available = True
+                        break
+                
+                if signal not in self.selected_signals and not found_in_available:
+                    print(f"  MISSING: Signal '{signal}' is not in selected list or available list")
+
+    def debug_state(self):
+        """Print the current state of the panel for debugging."""
+        print(f"=== AvailableSignalsPanel State ===")
+        print(f"  All signals: {len(self.all_signals)} items")
+        print(f"  Selected signals: {len(self.selected_signals)} items")
+        print(f"  Available list widget: {self.available_signals.count()} items")
+        print(f"  First 5 all_signals: {self.all_signals[:min(5, len(self.all_signals))]}")
+        print(f"  First 5 selected_signals: {self.selected_signals[:min(5, len(self.selected_signals))]}")
+        visible_signals = []
+        for i in range(self.available_signals.count()):
+            visible_signals.append(self.available_signals.item(i).text())
+        print(f"  First 5 visible signals: {visible_signals[:min(5, len(visible_signals))]}")
+        print(f"=================================")
+
+    def force_hide_signals(self, signal_names):
+        """Force-hide multiple signals at once, with extra debugging.
+        This method ensures all signals are properly added to selected_signals and removed from the available list."""
+        print(f"\n=== AvailableSignalsPanel.force_hide_signals ===")
+        print(f"Force hiding {len(signal_names)} signals: {signal_names}")
+        
+        # Make sure we have an actual list
+        if not isinstance(signal_names, list):
+            signal_names = [signal_names]
+        
+        # Directly add to selected_signals without checking to ensure all are hidden
+        for signal_name in signal_names:
+            if signal_name.strip():
+                self.selected_signals.append(signal_name.strip())
+                print(f"  Added {signal_name} to selected_signals")
+        
+        # Remove duplicates from selected_signals
+        self.selected_signals = list(set(self.selected_signals))
+        print(f"  After deduplication: {len(self.selected_signals)} signals in selected_signals")
+        
+        # Force refresh the list
+        print(f"  Refreshing list with {len(self.selected_signals)} signals hidden")
+        self.refresh_list()
+        
+        # Verify the refresh worked
+        hidden_count = 0
+        for signal in self.all_signals:
+            if signal not in self.selected_signals:
+                # Should be visible in list
+                pass
+            else:
+                # Should be hidden
+                hidden_count += 1
+        
+        print(f"  Verification: {hidden_count} signals hidden, {len(self.all_signals) - hidden_count} visible")
+        print(f"=== End force_hide_signals ===\n")
+
+    def protect_selected_signals(self):
+        """Make a backup of the current selected_signals list to protect it from being modified.
+        Call restore_selected_signals() to restore the backup after operations that might modify it."""
+        self._protected_selected_signals = self.selected_signals.copy()
+        print(f"Protected {len(self._protected_selected_signals)} selected signals")
+        
+    def restore_selected_signals(self):
+        """Restore the selected_signals list from the backup made by protect_selected_signals()."""
+        if hasattr(self, '_protected_selected_signals'):
+            print(f"Restoring {len(self._protected_selected_signals)} protected signals")
+            self.selected_signals = self._protected_selected_signals.copy()
+            # Ensure the list widget reflects the restored selected signals
+            self.refresh_list()
+            # Clean up the backup
+            del self._protected_selected_signals
 
 class SelectedSignalsPanel(QWidget):
     """Panel showing selected signals that lines up with the plot."""
@@ -144,6 +287,7 @@ class SelectedSignalsPanel(QWidget):
         # Create a custom widget to display signals aligned with plot
         self.signals_container = QWidget()
         self.signals_container.setMouseTracking(True)
+        self.signals_container.setToolTip("Double-click anywhere on a signal to toggle between Event/Wave view")
         self.signals_scroll = QScrollArea()
         self.signals_scroll.setWidget(self.signals_container)
         self.signals_scroll.setWidgetResizable(True)
@@ -166,14 +310,23 @@ class SelectedSignalsPanel(QWidget):
         self.selection_start_pos = None  # For tracking selection box
         self.is_selecting = False
         
+        # For drag and drop visualization
+        self.drag_in_progress = False
+        
+        # Reference to main window (set by MainWindow after creation)
+        self.main_window = None
+        
         # Enable drag and drop
         self.signals_container.setAcceptDrops(True)
         
         # Set size policy
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         
-        # Connect signals to handle interactions
+        # Explicitly install event filter on signals_container
         self.signals_container.installEventFilter(self)
+        
+        # Make sure we're listening for the right events
+        self.signals_container.setMouseTracking(True)
         
     def set_signals(self, signals):
         """Set the list of signals to display."""
@@ -189,14 +342,23 @@ class SelectedSignalsPanel(QWidget):
             self.update_container_size()
             self.signals_container.update()
             
-    def remove_signal(self, signal_name):
-        """Remove a signal from the panel."""
+    def remove_signal(self, signal_name, emit_signal=True):
+        """Remove a signal from the panel.
+        
+        Args:
+            signal_name: The name of the signal to remove
+            emit_signal: Whether to emit the signal_removed signal (defaults to True)
+        """
         if signal_name in self.signals:
             self.signals.remove(signal_name)
             self.selected_signals = []  # Clear selection after removal
             self.update_container_size()
             self.signals_container.update()
-            self.signal_removed.emit(signal_name)
+            if emit_signal:
+                self.signal_removed.emit(signal_name)
+                print(f"SelectedSignalsPanel: Removed {signal_name} and emitted signal_removed")
+            else:
+                print(f"SelectedSignalsPanel: Removed {signal_name} without emitting signal")
     
     def remove_selected_signals(self):
         """Remove all selected signals."""
@@ -238,14 +400,29 @@ class SelectedSignalsPanel(QWidget):
                 return True
             elif event.type() == QEvent.MouseButtonPress:
                 return self.handle_mouse_press(event)
+            elif event.type() == QEvent.MouseButtonDblClick:
+                return self.handle_mouse_double_click(event)
             elif event.type() == QEvent.MouseMove:
                 return self.handle_mouse_move(event)
             elif event.type() == QEvent.MouseButtonRelease:
                 return self.handle_mouse_release(event)
             elif event.type() == QEvent.DragEnter:
+                print("DragEnter event detected in eventFilter")
                 return self.handle_drag_enter(event)
             elif event.type() == QEvent.Drop:
+                print("Drop event detected in eventFilter")
                 return self.handle_drop(event)
+            # Add more event types for debugging
+            elif event.type() == QEvent.DragMove:
+                print("DragMove event detected in eventFilter")
+                # Always accept drag move events to receive drop
+                event.acceptProposedAction()
+                return True
+            elif event.type() == QEvent.DragLeave:
+                print("DragLeave event detected in eventFilter")
+                self.drag_in_progress = False
+                self.signals_container.update()
+                return True
                 
         return super().eventFilter(obj, event)
     
@@ -256,6 +433,12 @@ class SelectedSignalsPanel(QWidget):
         
         # Draw background
         painter.fillRect(self.signals_container.rect(), QColor(240, 240, 240))
+        
+        # If drag is in progress, draw a drop indicator
+        if self.drag_in_progress:
+            painter.fillRect(self.signals_container.rect(), QColor(220, 240, 255))
+            painter.setPen(QPen(QColor(0, 120, 215), 2, Qt.DashLine))
+            painter.drawRect(self.signals_container.rect().adjusted(5, 5, -5, -5))
         
         # If no signals, draw a message
         if not self.signals:
@@ -298,9 +481,11 @@ class SelectedSignalsPanel(QWidget):
             painter.setPen(QPen(QColor(180, 180, 180), 1))
             painter.drawRect(rect)
             
+            # Draw signal name with full width (no need to reserve space for indicators)
+            text_rect = rect.adjusted(5, 0, -5, 0)
+            
             # Draw signal name
             painter.setPen(QPen(QColor(0, 0, 0), 1))
-            text_rect = rect.adjusted(5, 0, -5, 0)  # Text margin
             painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignVCenter, signal)
             
         # Draw horizontal guide lines for alignment reference
@@ -327,24 +512,6 @@ class SelectedSignalsPanel(QWidget):
     def handle_mouse_press(self, event):
         """Handle mouse press events."""
         if event.button() == Qt.LeftButton:
-            # Check for double click
-            current_time = event.timestamp()
-            double_click_interval = QApplication.doubleClickInterval()
-            
-            if (self.last_click_pos is not None and 
-                (current_time - self.last_click_time) < double_click_interval and
-                (event.pos() - self.last_click_pos).manhattanLength() < 5):
-                
-                # This is a double click
-                index = self.get_signal_index_at_pos(event.pos())
-                if index >= 0:
-                    self.remove_signal(self.signals[index])
-                    return True
-            
-            # Update click time and position for potential future double click
-            self.last_click_time = current_time
-            self.last_click_pos = event.pos()
-            
             # Get the index at click position
             index = self.get_signal_index_at_pos(event.pos())
             
@@ -399,15 +566,60 @@ class SelectedSignalsPanel(QWidget):
                 # Show context menu for selection
                 menu = QMenu(self)
                 
+                # Get the current display mode from the GraphView for this signal
+                if not self.main_window or not hasattr(self.main_window, 'graph_view'):
+                    # If we can't access graph_view, just show remove option
+                    if len(self.selected_signals) == 1:
+                        signal_name = self.signals[self.selected_signals[0]]
+                        remove_action = menu.addAction(f"Remove Signal '{signal_name}'")
+                    else:
+                        remove_action = menu.addAction(f"Remove {len(self.selected_signals)} Selected Signals")
+                    
+                    action = menu.exec_(self.signals_container.mapToGlobal(event.pos()))
+                    if action == remove_action:
+                        self.remove_selected_signals()
+                    return True
+                
+                # We have access to graph_view
+                selected_signal = self.signals[self.selected_signals[0]]
+                current_mode = self.main_window.graph_view.get_signal_display_mode(selected_signal)
+                
                 if len(self.selected_signals) == 1:
                     signal_name = self.signals[self.selected_signals[0]]
                     remove_action = menu.addAction(f"Remove Signal '{signal_name}'")
+                    
+                    # Add option to toggle display mode
+                    if current_mode == "event":
+                        mode_action = menu.addAction(f"Display as Waveform")
+                    else:
+                        mode_action = menu.addAction(f"Display as Events")
                 else:
                     remove_action = menu.addAction(f"Remove {len(self.selected_signals)} Selected Signals")
+                    # For multiple selections, just show generic options
+                    mode_as_wave_action = menu.addAction(f"Display Selected as Waveforms")
+                    mode_as_event_action = menu.addAction(f"Display Selected as Events")
                 
                 action = menu.exec_(self.signals_container.mapToGlobal(event.pos()))
-                if action == remove_action:
-                    self.remove_selected_signals()
+                
+                if len(self.selected_signals) == 1:
+                    if action == remove_action:
+                        self.remove_selected_signals()
+                    elif action == mode_action:
+                        signal_name = self.signals[self.selected_signals[0]]
+                        self.toggle_signal_display_mode(signal_name)
+                else:
+                    if action == remove_action:
+                        self.remove_selected_signals()
+                    elif action == mode_as_wave_action:
+                        for index in self.selected_signals:
+                            signal_name = self.signals[index]
+                            self.main_window.graph_view.set_signal_display_mode(signal_name, "wave")
+                        self.signals_container.update()
+                    elif action == mode_as_event_action:
+                        for index in self.selected_signals:
+                            signal_name = self.signals[index]
+                            self.main_window.graph_view.set_signal_display_mode(signal_name, "event")
+                        self.signals_container.update()
                 
                 return True
         
@@ -491,22 +703,106 @@ class SelectedSignalsPanel(QWidget):
     def handle_drag_enter(self, event):
         """Handle drag enter events."""
         if event.mimeData().hasText():
+            print(f"Drag enter accepted in SelectedSignalsPanel: {event.mimeData().text()}")
+            self.drag_in_progress = True
+            self.signals_container.update()  # Repaint to show drop indicator
             event.acceptProposedAction()
             return True
         return False
     
     def handle_drop(self, event):
         """Handle drop events."""
+        self.drag_in_progress = False  # Reset drag state
+        self.signals_container.update()  # Repaint to remove drop indicator
+        
+        print("\n=== SelectedSignalsPanel handle_drop START ===")
         if event.mimeData().hasText():
-            signal_name = event.mimeData().text()
-            self.add_signal(signal_name)
+            text_data = event.mimeData().text().strip()
+            print(f"Raw text data: '{text_data}'")
+            
+            # Check if it's multiple signals (separated by newlines)
+            if "\n" in text_data:
+                # Split by newline and filter out empty strings
+                signal_names = [s.strip() for s in text_data.split("\n") if s.strip()]
+                print(f"Drop received in SelectedSignalsPanel: {len(signal_names)} signals: {signal_names}")
+                
+                # Process ALL signals, even if they're already in the panel
+                # This ensures they are all hidden from the available panel
+                signals_processed = []
+                for signal_name in signal_names:
+                    if signal_name:
+                        # Add to the panel if not already present
+                        if signal_name not in self.signals:
+                            print(f"  Adding {signal_name} to selected panel")
+                            self.add_signal(signal_name)
+                        else:
+                            print(f"  Signal {signal_name} already in selected panel")
+                        # Track all signals for hiding from available panel
+                        signals_processed.append(signal_name)
+                
+                # Notify main window about ALL signals, not just newly added ones
+                # This ensures all signals are hidden from the available panel
+                if signals_processed and self.main_window:
+                    print(f"Notifying main window to handle signals: {signals_processed}")
+                    print(f"  Signal type: {type(signals_processed)}")
+                    print(f"  Content types: {[type(s) for s in signals_processed]}")
+                    print(f"  Is main_window set? {self.main_window is not None}")
+                    
+                    # Call the method directly with explicit debugging
+                    self.main_window.handle_direct_signals_add(signals_processed)
+            else:
+                # Single signal
+                signal_name = text_data
+                print(f"Drop received in SelectedSignalsPanel: single signal: '{signal_name}'")
+                
+                # Make sure we handle the drop
+                if signal_name not in self.signals:
+                    print(f"  Adding {signal_name} to selected panel")
+                    self.add_signal(signal_name)
+                else:
+                    print(f"  Signal {signal_name} already in selected panel")
+                
+                # Always notify main window, even if already in panel
+                # This ensures the signal is hidden from available panel
+                if self.main_window:
+                    print(f"Notifying main window to handle signal: '{signal_name}'")
+                    print(f"  Is main_window set? {self.main_window is not None}")
+                    self.main_window.handle_direct_signals_add([signal_name])
+            
             event.acceptProposedAction()
+            print("=== SelectedSignalsPanel handle_drop END ===\n")
+            return True
+        print("=== SelectedSignalsPanel handle_drop: No text mimeData ===\n")
+        return False
+
+    def toggle_signal_display_mode(self, signal_name):
+        """Toggle the display mode for a signal between 'event' and 'wave'."""
+        # Call the GraphView's method to toggle the display mode
+        if self.main_window and hasattr(self.main_window, 'graph_view'):
+            new_mode = self.main_window.graph_view.toggle_signal_display_mode(signal_name)
+            # Update the display to show any visual indicator for the mode
+            self.signals_container.update()
+            return new_mode
+        return None
+
+    def handle_mouse_double_click(self, event):
+        """Handle native double-click events."""
+        if event.button() == Qt.LeftButton:
+            index = self.get_signal_index_at_pos(event.pos())
+            if index >= 0:
+                # Get the signal name and toggle its display mode
+                signal_name = self.signals[index]
+                if self.main_window and hasattr(self.main_window, 'graph_view'):
+                    self.toggle_signal_display_mode(signal_name)
+                    # Don't reset selection to keep selected signals intact
+                    return True
         return False
 
 class GraphView(QWidget):
     """Widget for rendering the event-rule graph with interactive signal labels."""
     signals_changed = pyqtSignal(list)  # Emitted when signals are added, removed, or reordered
-    signal_added = pyqtSignal(str)  # New signal to notify when a signal is added by drag and drop
+    signal_added = pyqtSignal(str)      # New signal to notify when a signal is added by drag and drop
+    signals_added = pyqtSignal(list)    # New signal for batch adding by drag and drop
     
     # Constants for time units
     TIME_UNITS = {
@@ -530,6 +826,9 @@ class GraphView(QWidget):
         self.node_radius = 5
         self.setMinimumSize(600, 400)
         
+        # Set tooltip for the graph view
+        self.setToolTip("Double-click on a signal to toggle between Event/Wave view")
+        
         # Time unit for display (default: picoseconds)
         self.time_unit = "ps"
         self.time_factor = self.TIME_UNITS[self.time_unit]["factor"]
@@ -540,11 +839,17 @@ class GraphView(QWidget):
         # Variables to display
         self.display_variables = []  # List of variables to display in order
         
+        # Signal display modes (event or wave)
+        self.signal_display_modes = {}  # Maps variable name -> "event" or "wave"
+        
         # Timing mode (true or normalized)
         self.normalized_timing = False
         self.normalized_times = []  # List of times in order for normalized view
         self.original_times = []    # List of original times from the file
         self.time_mapping = {}      # Maps original times to normalized times
+        
+        # For drag and drop visualization
+        self.drag_in_progress = False
         
         # Enable mouse tracking and focus
         self.setMouseTracking(True)
@@ -814,15 +1119,47 @@ class GraphView(QWidget):
             self.update()
         self.signals_changed.emit(self.display_variables)
     
-    def add_variable(self, variable):
-        """Add a variable to the display if not already present."""
+    def add_variable(self, variable, batch_operation=False):
+        """Add a variable to the display if not already present.
+        
+        Args:
+            variable: The variable name to add
+            batch_operation: If True, won't emit signals_changed (to avoid cascading changes)
+        """
         if variable not in self.display_variables:
+            print(f"GraphView: Adding variable {variable}")
             self.display_variables.append(variable)
             if self.graph:
                 self.update_variable_positions()
                 self.update()
-            self.signals_changed.emit(self.display_variables)
             
+            # Only emit signals_changed if not in a batch operation
+            if not batch_operation:
+                print(f"GraphView: Emitting signals_changed with {len(self.display_variables)} variables")
+                self.signals_changed.emit(self.display_variables)
+            else:
+                print(f"GraphView: Skipping signals_changed emission (batch operation)")
+                
+    def add_variables(self, variables):
+        """Add multiple variables at once, only emitting signals_changed once at the end."""
+        print(f"GraphView: Adding {len(variables)} variables as batch")
+        if not variables:
+            return
+            
+        added_any = False
+        for variable in variables:
+            if variable not in self.display_variables:
+                self.display_variables.append(variable)
+                added_any = True
+                
+        if added_any and self.graph:
+            self.update_variable_positions()
+            self.update()
+            
+        # Only emit once for all variables
+        print(f"GraphView: Emitting signals_changed with {len(self.display_variables)} variables")
+        self.signals_changed.emit(self.display_variables)
+    
     def remove_variable(self, variable):
         """Remove a variable from the display."""
         if variable in self.display_variables:
@@ -904,7 +1241,32 @@ class GraphView(QWidget):
     
     def paintEvent(self, event):
         if not self.graph or not self.graph.transitions:
-            return
+            # If no graph data, show drop target indicator if drag in progress
+            if self.drag_in_progress:
+                painter = QPainter(self)
+                painter.setRenderHint(QPainter.Antialiasing)
+                painter.fillRect(self.rect(), QColor(220, 240, 255))
+                painter.setPen(QPen(QColor(0, 120, 215), 2, Qt.DashLine))
+                painter.drawRect(self.rect().adjusted(5, 5, -5, -5))
+                
+                # Draw message
+                message_rect = QRectF(0, self.height()/2 - 30, self.width(), 60)
+                painter.setPen(QPen(QColor(0, 80, 180), 1))
+                painter.drawText(message_rect, Qt.AlignCenter, 
+                                "Drop signal here to add to graph")
+                painter.end()
+                return
+            else:
+                # Draw empty background if no graph and no drag
+                painter = QPainter(self)
+                painter.setRenderHint(QPainter.Antialiasing)
+                painter.fillRect(self.rect(), QColor(240, 240, 240))
+                message_rect = QRectF(0, self.height()/2 - 30, self.width(), 60)
+                painter.setPen(QPen(QColor(100, 100, 100), 1))
+                painter.drawText(message_rect, Qt.AlignCenter, 
+                               "No file loaded\nUse File > Load .sim File to open a simulation file")
+                painter.end()
+                return
             
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -912,6 +1274,17 @@ class GraphView(QWidget):
         try:
             # Draw background
             painter.fillRect(self.rect(), QColor(240, 240, 240))
+            
+            # If drag is in progress, show drop indicator
+            if self.drag_in_progress:
+                painter.fillRect(QRectF(0, 0, self.width(), 40), QColor(220, 240, 255))
+                painter.setPen(QPen(QColor(0, 120, 215), 2, Qt.DashLine))
+                painter.drawRect(QRectF(5, 5, self.width()-10, 30))
+                
+                # Draw hint text
+                painter.setPen(QPen(QColor(0, 80, 180), 1))
+                painter.drawText(QRectF(0, 5, self.width(), 30), Qt.AlignCenter, 
+                                "Drop signal here to add to graph")
             
             # Get the visible time range for culling
             left_time = self.x_to_time(0)
@@ -922,15 +1295,21 @@ class GraphView(QWidget):
             
             # Determine if we're dealing with the true timing or normalized timing
             if self.normalized_timing:
-                # For normalized mode, we need appropriate time values
+                # For normalized mode, we use the normalized time values directly
                 visible_min_time = min_visible_time
                 visible_max_time = max_visible_time
                 
                 # Get the min/max of original times for informational purposes
-                orig_min_time, orig_max_time = self.graph.get_min_max_time()
+                if self.graph:
+                    orig_min_time, orig_max_time = self.graph.get_min_max_time()
+                else:
+                    orig_min_time, orig_max_time = 0, 1
             else:
                 # For true timing, use the actual min/max from the graph
-                min_time, max_time = self.graph.get_min_max_time()
+                if self.graph:
+                    min_time, max_time = self.graph.get_min_max_time()
+                else:
+                    min_time, max_time = 0, 1
                 visible_min_time = max(min_time, min_visible_time)
                 visible_max_time = min(max_time, max_visible_time)
             
@@ -1004,6 +1383,10 @@ class GraphView(QWidget):
                 painter.drawText(message_rect, Qt.AlignCenter, 
                                 "No signals selected\nSelect signals from the Available Signals panel")
             
+            # Ensure we have a graph before processing transitions
+            if not self.graph or not self.graph.transitions:
+                return
+                
             # Filter visible transitions for better performance
             visible_transitions = []
             for transition in self.graph.transitions:
@@ -1012,17 +1395,12 @@ class GraphView(QWidget):
                 if norm_var not in self.display_variables:
                     continue
                 
-                # For normalized timing, we need to use the mapped time
-                if self.normalized_timing:
-                    display_time = self.get_displayed_time(transition.time)
-                    # Skip if not in viewport time range
-                    if display_time < min_visible_time or display_time > max_visible_time:
-                        continue
-                else:
-                    # For true timing, use the actual time
-                    # Skip if not in viewport time range
-                    if transition.time < min_visible_time or transition.time > max_visible_time:
-                        continue
+                # Get the appropriate time for visibility check based on timing mode
+                display_time = self.get_displayed_time(transition.time)
+                
+                # Skip if not in viewport time range
+                if display_time < visible_min_time or display_time > visible_max_time:
+                    continue
                     
                 # Skip if variable position is not defined
                 if transition.variable not in self.variable_y_positions:
@@ -1042,8 +1420,115 @@ class GraphView(QWidget):
                 y = self.variable_y_positions[var]
                 painter.drawLine(QLineF(0, y, self.width(), y))
             
-            # First pass: Draw the transition nodes for visible transitions only
-            for transition in visible_transitions:                
+            # First collect all transitions per variable with their display times
+            transitions_by_var = {}
+            for transition in self.graph.transitions:
+                norm_var = SimFileParser.normalize_variable(transition.variable)
+                if norm_var not in self.display_variables:
+                    continue
+                
+                if norm_var not in transitions_by_var:
+                    transitions_by_var[norm_var] = []
+                
+                # Store with display time for correct sorting in normalized mode
+                display_time = self.get_displayed_time(transition.time)
+                transitions_by_var[norm_var].append((transition, display_time))
+            
+            # Sort transitions by display time for each variable
+            for var in transitions_by_var:
+                transitions_by_var[var].sort(key=lambda x: x[1])
+            
+            # Draw waveforms for variables in "wave" mode
+            for var in self.display_variables:
+                if var not in self.variable_y_positions or var not in transitions_by_var:
+                    continue
+                
+                if self.get_signal_display_mode(var) == "wave":
+                    y = self.variable_y_positions[var]
+                    
+                    # Get transitions for this variable
+                    var_transitions = transitions_by_var[var]
+                    
+                    # Skip if no transitions
+                    if not var_transitions:
+                        continue
+                    
+                    # Set pen for waveform
+                    painter.setPen(QPen(QColor(0, 0, 0), 2))
+                    painter.setBrush(Qt.NoBrush)
+                    
+                    # Create path for waveform
+                    waveform_path = QPainterPath()
+                    
+                    # Start from beginning of visible area or first transition, whichever is visible first
+                    # first_time and last_time are in the appropriate timing mode (normalized or true)
+                    first_time = min_visible_time  # Already includes margin
+                    last_time = max_visible_time
+                    
+                    # Calculate the initial state at the beginning of the visible area
+                    # Default to 0 (low) if there's no earlier transition
+                    initial_state = 0
+                    
+                    # Find all transitions before the visible area and determine the final state
+                    transitions_before_visible = [(t, dt) for t, dt in var_transitions if dt < first_time]
+                    if transitions_before_visible:
+                        # Get the last transition before the visible area
+                        last_before = transitions_before_visible[-1]
+                        # Set initial state based on this transition's effect
+                        initial_state = 1 if last_before[0].is_rising else 0
+                    else:
+                        # If no transitions before the visible area, check if the first transition is rising or falling
+                        # If the first transition is falling, that implies the signal starts high
+                        if var_transitions and not var_transitions[0][0].is_rising:
+                            initial_state = 1
+                    
+                    # Start with the initial state
+                    current_state = initial_state
+                    
+                    # Find start position - use the leftmost visible point
+                    start_x = max(0, self.time_to_x(first_time))
+                    start_y = y - 8 if current_state == 1 else y + 8  # 8px offset for high/low
+                    
+                    # Start waveform path
+                    waveform_path.moveTo(start_x, start_y)
+                    
+                    # Add segments for each transition in the visible area
+                    for transition, display_time in var_transitions:
+                        # Skip transitions before the visible area - we've already accounted for their effect
+                        if display_time < first_time:
+                            continue
+                            
+                        # Stop if beyond visible area
+                        if display_time > last_time:
+                            break
+                        
+                        # Get x position for this transition using the display time
+                        x = self.time_to_x(transition.time)
+                        
+                        # Draw horizontal segment to transition point
+                        waveform_path.lineTo(x, start_y)
+                        
+                        # Update state and y position
+                        current_state = 1 if transition.is_rising else 0
+                        start_y = y - 8 if current_state == 1 else y + 8
+                        
+                        # Draw vertical segment
+                        waveform_path.lineTo(x, start_y)
+                    
+                    # Complete the waveform to the right edge
+                    waveform_path.lineTo(self.width(), start_y)
+                    
+                    # Draw the waveform
+                    painter.drawPath(waveform_path)
+            
+            # First pass: Draw the transition nodes for visible transitions only 
+            # but only for signals in "event" mode
+            for transition in visible_transitions:
+                # Skip if variable is in "wave" mode
+                norm_var = SimFileParser.normalize_variable(transition.variable)
+                if self.get_signal_display_mode(norm_var) == "wave":
+                    continue
+                    
                 # Draw node
                 x = self.time_to_x(transition.time)
                 y = self.variable_y_positions[transition.variable]
@@ -1078,11 +1563,8 @@ class GraphView(QWidget):
                     continue
                 
                 # Check if this transition is visible
-                if self.normalized_timing:
-                    display_time = self.get_displayed_time(transition.time)
-                    target_visible = (min_visible_time <= display_time <= max_visible_time)
-                else:
-                    target_visible = (min_visible_time <= transition.time <= max_visible_time)
+                display_time = self.get_displayed_time(transition.time)
+                target_visible = (visible_min_time <= display_time <= visible_max_time)
                     
                 if not target_visible and id(transition) not in visible_transitions_dict:
                     # If target is not visible, we'll check each source later
@@ -1091,6 +1573,9 @@ class GraphView(QWidget):
                 # Get target coordinates even if not visible
                 x = self.time_to_x(transition.time)
                 y = self.variable_y_positions[transition.variable]
+                
+                # Get target display mode
+                target_mode = self.get_signal_display_mode(norm_var)
                 
                 # Draw incoming links (causal dependencies)
                 for source in transition.incoming_links:
@@ -1101,12 +1586,16 @@ class GraphView(QWidget):
                     if source.variable not in self.variable_y_positions:
                         continue
                     
+                    # Get source display mode
+                    source_mode = self.get_signal_display_mode(source_norm_var)
+                    
+                    # For wave signals, only draw arrows coming from event signals
+                    if target_mode == "wave" and source_mode == "wave":
+                        continue  # Skip arrows between wave signals
+                    
                     # Check if source is visible
-                    if self.normalized_timing:
-                        display_time = self.get_displayed_time(source.time)
-                        source_visible = (min_visible_time <= display_time <= max_visible_time)
-                    else:
-                        source_visible = (min_visible_time <= source.time <= max_visible_time)
+                    source_display_time = self.get_displayed_time(source.time)
+                    source_visible = (visible_min_time <= source_display_time <= visible_max_time)
                     
                     # Skip if both source and target are invisible
                     if not source_visible and not target_visible:
@@ -1114,6 +1603,14 @@ class GraphView(QWidget):
                     
                     src_x = self.time_to_x(source.time)
                     src_y = self.variable_y_positions[source.variable]
+                    
+                    # Adjust target y-position for wave signals based on state
+                    if target_mode == "wave":
+                        # Determine the state at this transition
+                        is_high = transition.is_rising  # If rising, arrow points to low->high transition
+                        # For wave signals, we need to adjust the y coordinate
+                        # Position the arrowhead at the proper waveform level
+                        y = y - 8 if is_high else y + 8  # 8px offset for high/low
                     
                     # Create a curved path for the arrow
                     path = QPainterPath()
@@ -1165,12 +1662,16 @@ class GraphView(QWidget):
                     if source.variable not in self.variable_y_positions:
                         continue
                     
+                    # Get source display mode
+                    source_mode = self.get_signal_display_mode(source_norm_var)
+                    
+                    # For wave signals, only draw arrows coming from event signals
+                    if target_mode == "wave" and source_mode == "wave":
+                        continue  # Skip arrows between wave signals
+                    
                     # Check if source is visible
-                    if self.normalized_timing:
-                        display_time = self.get_displayed_time(source.time)
-                        source_visible = (min_visible_time <= display_time <= max_visible_time)
-                    else:
-                        source_visible = (min_visible_time <= source.time <= max_visible_time)
+                    source_display_time = self.get_displayed_time(source.time)
+                    source_visible = (visible_min_time <= source_display_time <= visible_max_time)
                     
                     # Skip if both source and target are invisible
                     if not source_visible and not target_visible:
@@ -1178,6 +1679,13 @@ class GraphView(QWidget):
                     
                     src_x = self.time_to_x(source.time)
                     src_y = self.variable_y_positions[source.variable]
+                    
+                    # Adjust target y-position for wave signals based on state
+                    if target_mode == "wave":
+                        # Determine the state at this transition
+                        is_high = transition.is_rising  # If rising, arrow points to low->high transition
+                        # For wave signals, we need to adjust the y coordinate
+                        y = y - 8 if is_high else y + 8  # 8px offset for high/low
                     
                     path = QPainterPath()
                     path.moveTo(src_x, src_y)
@@ -1251,19 +1759,68 @@ class GraphView(QWidget):
         event.accept()
     
     def dragEnterEvent(self, event):
+        """Handle drag enter events."""
         if event.mimeData().hasText():
+            print(f"Drag enter accepted in GraphView: {event.mimeData().text()}")
+            self.drag_in_progress = True
+            self.update() # Repaint to show drop indicator
             event.acceptProposedAction()
-    
+            
+    def dragLeaveEvent(self, event):
+        """Handle drag leave events."""
+        print("DragLeave in GraphView")
+        self.drag_in_progress = False
+        self.update() # Repaint to remove drop indicator
+        
     def dropEvent(self, event):
+        """Handle drop events."""
+        self.drag_in_progress = False
+        self.update() # Repaint to remove drop indicator
+        
         if event.mimeData().hasText():
-            signal_name = event.mimeData().text()
-            self.add_variable(signal_name)
-            # Emit a signal to notify that a signal was added via drag and drop
-            self.signal_added.emit(signal_name)
+            text_data = event.mimeData().text().strip()
+            
+            # Check if it's multiple signals (separated by newlines)
+            if "\n" in text_data:
+                # Split by newline and filter out empty strings
+                signal_names = [s.strip() for s in text_data.split("\n") if s.strip()]
+                print(f"Drop received in GraphView: {len(signal_names)} signals: {signal_names}")
+                
+                # Process and emit all signals, even if some were already displayed
+                # This ensures they are all hidden from the available signals panel
+                signals_processed = []
+                for signal_name in signal_names:
+                    if signal_name:
+                        # Add to graph variables if not already present
+                        if signal_name not in self.display_variables:
+                            self.add_variable(signal_name)
+                        signals_processed.append(signal_name)
+                
+                # Emit a signal for ALL processed signals, not just newly added ones
+                # This ensures all signals are removed from the available panel
+                if signals_processed:
+                    print(f"GraphView emitting signals_added for: {signals_processed}")
+                    self.signals_added.emit(signals_processed)
+            else:
+                # Single signal
+                signal_name = text_data
+                print(f"Drop received in GraphView: single signal: {signal_name}")
+                
+                # Make sure we handle the drop and hide from available signals
+                # Always emit the signal, even if already displayed
+                if signal_name not in self.display_variables:
+                    self.add_variable(signal_name)
+                
+                # Always emit to ensure the signal is hidden from available panel
+                print(f"GraphView emitting signal_added for: {signal_name}")
+                self.signal_added.emit(signal_name)
+            
             event.acceptProposedAction()
-
+            return True
+        return False
+        
     def mouseDoubleClickEvent(self, event):
-        """Handle double-click to remove variables at a specific position."""
+        """Handle double-click to toggle display mode for a variable."""
         if not self.graph or not self.display_variables:
             return
             
@@ -1271,7 +1828,8 @@ class GraphView(QWidget):
         for var, y_pos in self.variable_y_positions.items():
             if abs(event.pos().y() - y_pos) < 15:  # Within reasonable range of line
                 if var in self.display_variables:
-                    self.remove_variable(var)
+                    # Toggle display mode instead of removing
+                    self.toggle_signal_display_mode(var)
                     break
                     
         event.accept()
@@ -1330,6 +1888,41 @@ class GraphView(QWidget):
             return min_time
             
         return normalized_time
+
+    def set_signal_display_mode(self, signal_name, mode):
+        """Set the display mode for a signal to either 'event' or 'wave'."""
+        if mode in ["event", "wave"]:
+            # Only update if we're actually changing the mode
+            current_mode = self.get_signal_display_mode(signal_name)
+            if current_mode != mode:
+                print(f"Setting display mode for {signal_name} to {mode}")
+                self.signal_display_modes[signal_name] = mode
+                self.update()  # Redraw the graph
+            return mode
+        return self.get_signal_display_mode(signal_name)
+        
+    def get_signal_display_mode(self, signal_name):
+        """Get the display mode for a signal. Default is 'event'."""
+        return self.signal_display_modes.get(signal_name, "event")
+        
+    def toggle_signal_display_mode(self, signal_name):
+        """Toggle the display mode for a signal between 'event' and 'wave'."""
+        current_mode = self.get_signal_display_mode(signal_name)
+        new_mode = "wave" if current_mode == "event" else "event"
+        self.set_signal_display_mode(signal_name, new_mode)
+        return new_mode
+
+    def dragMoveEvent(self, event):
+        """Handle drag move events."""
+        if event.mimeData().hasText():
+            print(f"DragMove in GraphView, accepting: {event.mimeData().text()}")
+            event.acceptProposedAction()
+            
+    def dragLeaveEvent(self, event):
+        """Handle drag leave events."""
+        print("DragLeave in GraphView")
+        self.drag_in_progress = False
+        self.update() # Repaint to remove drop indicator
 
 class SimFileParser:
     """Parser for .sim files containing event-rule data."""
@@ -1595,6 +2188,9 @@ class MainWindow(QMainWindow):
         self.graph_view = GraphView()
         self.graph_view.signals_changed.connect(self.update_selected_signals)
         self.graph_view.signal_added.connect(self.handle_direct_signal_add)
+        self.graph_view.signals_added.connect(self.handle_direct_signals_add)
+        # Directly connect panels for better synchronization
+        self.graph_view.available_signals_panel = self.available_signals_panel
         graph_view_layout.addWidget(self.graph_view)
         
         # Add panels to the horizontal layout
@@ -1639,11 +2235,19 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(self.file_label)
         
         # Add help text to the status bar
-        self.hint_label = QLabel(" | Drag to add/reorder | Ctrl+Click for selection | Shift+Scroll to zoom | Ctrl+I: initial view | Ctrl+F: full view")
+        self.hint_label = QLabel(" | Drag to add/reorder | Double-click to toggle Event/Wave | Ctrl+Click for selection | Shift+Scroll to zoom | Ctrl+I: initial view | Ctrl+F: full view")
         self.statusBar().addWidget(self.hint_label)
         
         # Track the currently loaded graph
         self.current_graph = None
+        
+        # Register the main window with panels for easier access to graph_view
+        self.available_signals_panel.main_window = self
+        self.selected_signals_panel.main_window = self
+        
+    def get_graph_view(self):
+        """Return the graph view for components that need to access it."""
+        return self.graph_view
 
     def toggle_timing_mode(self):
         """Toggle between true timing and normalized timing modes."""
@@ -1730,16 +2334,164 @@ class MainWindow(QMainWindow):
         self.graph_view.set_display_variables(signals)
         
     def update_selected_signals(self, signals):
-        """Update the selected signals panel with the current signals in the graph."""
-        self.selected_signals_panel.set_signals(signals)
+        """Update the selected signals panel with the given list of signals.
+
+        Args:
+            signals: List of signal names to update the selected signals panel with.
+        """
+        print(f"\n=== MainWindow.update_selected_signals ===")
+        print(f"Updating selected signals panel with: {signals}")
+
+        # Add missing signals
+        for signal in signals:
+            if signal not in self.selected_signals_panel.signals:
+                print(f"  Adding missing signal to panel: {signal}")
+                self.selected_signals_panel.add_signal(signal)
+
+        # Remove signals that are no longer in the graph view
+        current_signals = set(self.selected_signals_panel.signals)
+        signals_set = set(signals)
+        signals_to_remove = [s for s in self.selected_signals_panel.signals if s not in signals]
+        if signals:
+            self.selected_signals_panel.set_signals(signals)
+            self.selected_signals_panel.refresh_list()
+            self.selected_signals_panel.debug_state()
+
+        # Remove signals that are no longer in the graph view
+        for signal in self.selected_signals_panel.signals:
+            if signal not in signals:
+                print(f"  Removing signal from panel: {signal}")
+                self.selected_signals_panel.remove_signal(signal, emit_signal=False)
 
     def handle_direct_signal_add(self, signal_name):
         """Handle when a signal is added directly to the graph via drag and drop."""
         # Hide the signal from available signals panel
+        print(f"MainWindow hiding signal from available panel: {signal_name}")
         self.available_signals_panel.hide_signal(signal_name)
         
-        # Add to the selected signals panel
-        self.selected_signals_panel.add_signal(signal_name)
+        # Add to the selected signals panel if not already there
+        if signal_name not in self.selected_signals_panel.signals:
+            print(f"  Adding signal to selected panel: {signal_name}")
+            self.selected_signals_panel.add_signal(signal_name)
+        else:
+            print(f"  Signal already in selected panel: {signal_name}")
+        
+        # Add to the graph view if not already there
+        if signal_name not in self.graph_view.display_variables:
+            print(f"  Adding signal to graph view: {signal_name}")
+            self.graph_view.add_variable(signal_name)
+        else:
+            print(f"  Signal already in graph view: {signal_name}")
+            
+        # Note: For future maintainability, consider using handle_direct_signals_add([signal_name])
+        # instead of duplicating logic
+
+    def handle_direct_signals_add(self, signal_names):
+        """Handle when multiple signals are added directly to the graph via drag and drop."""
+        print("\n=== MainWindow.handle_direct_signals_add START ===")
+        print(f"Signal names received: {signal_names}")
+        print(f"  Type: {type(signal_names)}")
+        
+        if not isinstance(signal_names, list):
+            print(f"  WARNING: Expected list but got {type(signal_names)}")
+            if isinstance(signal_names, str):
+                print(f"  Converting string to list: {signal_names}")
+                signal_names = [signal_names]
+            else:
+                print(f"  ERROR: Cannot process {type(signal_names)}")
+                return
+        
+        print(f"  Processing {len(signal_names)} signals")
+        
+        # Protect the selected signals list to prevent signals from reappearing
+        self.available_signals_panel.protect_selected_signals()
+        
+        # Hide all signals from the available signals panel
+        print(f"MainWindow hiding multiple signals from available panel: {signal_names}")
+        
+        # Force debug state before making changes
+        print("Before hiding signals:")
+        self.available_signals_panel.debug_state()
+        
+        try:
+            # Use the new force_hide_signals method instead of hide_signals
+            print(f"Calling force_hide_signals with: {signal_names}")
+            self.available_signals_panel.force_hide_signals(signal_names)
+            
+            # First, add all signals to the selected signals panel
+            for signal_name in signal_names:
+                if signal_name not in self.selected_signals_panel.signals:
+                    print(f"  Adding signal to selected panel: {signal_name}")
+                    self.selected_signals_panel.add_signal(signal_name)
+                else:
+                    print(f"  Signal already in selected panel: {signal_name}")
+            
+            # Then add all signals to the graph view as a batch operation
+            # This prevents multiple signals_changed emissions that could cause cascading issues
+            print(f"  Adding all signals to graph view as batch")
+            new_signals = [s for s in signal_names if s not in self.graph_view.display_variables]
+            if new_signals:
+                self.graph_view.add_variables(new_signals)
+            else:
+                print(f"  No new signals to add to graph view")
+        finally:
+            # Always restore the protected signals to ensure they don't get accidentally shown
+            self.available_signals_panel.restore_selected_signals()
+                    
+        # Force debug state after making changes
+        print("After hiding signals:")
+        self.available_signals_panel.debug_state()
+        print("=== MainWindow.handle_direct_signals_add END ===\n")
+
+# Add a custom QListWidget that properly handles drag operations
+
+# Add a custom QListWidget that properly handles drag operations
+class DraggableListWidget(QListWidget):
+    """Enhanced QListWidget with improved drag capabilities."""
+    
+    def startDrag(self, supportedActions):
+        """Override startDrag to ensure proper MIME data is set."""
+        # Get the selected items
+        items = self.selectedItems()
+        if not items:
+            print("No items selected for drag")
+            return
+            
+        # Create mime data
+        mime_data = QMimeData()
+        
+        # If only one item is selected, use simple text format
+        if len(items) == 1:
+            mime_data.setText(items[0].text())
+            print(f"Starting drag with signal: {items[0].text()}")
+        else:
+            # For multiple items, create a list of signal names
+            signal_names = [item.text() for item in items]
+            # Store as text with newline separators for parsing on drop
+            mime_data.setText("\n".join(signal_names))
+            print(f"Starting drag with {len(signal_names)} signals: {signal_names}")
+        
+        # Create drag
+        drag = QDrag(self)
+        drag.setMimeData(mime_data)
+        
+        # Print debug info before starting drag
+        print(f"MIME data has text: {mime_data.hasText()}")
+        print(f"MIME data text content: {mime_data.text()}")
+        
+        # Start the drag operation
+        result = drag.exec_(supportedActions)
+        
+        # Print debug info
+        print(f"Drag completed with result: {result}")
+        print(f"Result meaning: {'Drop was accepted' if result == Qt.DropAction.MoveAction else 'Drop was not accepted or cancelled'}")
+
+    def dragMoveEvent(self, event):
+        """Override to ensure drag move events are always accepted."""
+        if event.mimeData().hasText():
+            print(f"DragMove in list widget, accepting: {event.mimeData().text()}")
+            event.acceptProposedAction()
+        super().dragMoveEvent(event)
 
 def main():
     app = QApplication(sys.argv)
