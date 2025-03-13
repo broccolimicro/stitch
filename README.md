@@ -69,3 +69,6 @@ Example:
 - Blue arrows represent causal links
 - Orange dashed arrows represent timing assumptions
 
+![Screenshot from 2025-03-13 08-38-34](https://github.com/user-attachments/assets/583c821d-f9c0-4a60-8202-f3a701ed122c)
+![Screenshot from 2025-03-13 08-39-18](https://github.com/user-attachments/assets/ee7a725b-07d2-4689-80cd-5b3aa9580c78)
+![Screenshot from 2025-03-13 08-39-42](https://github.com/user-attachments/assets/70986cb6-2cb5-449b-99c3-97d90c45d27d)
