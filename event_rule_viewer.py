@@ -80,10 +80,23 @@ class AvailableSignalsPanel(QWidget):
         self.selected_signals = []
         
     def set_available_signals(self, signals):
-        """Set the list of available signals."""
+        """Set the list of available signals.
+        
+        Args:
+            signals: The list of signals to set as available.
+        """
+        # Save the current selected_signals first
+        current_selected = self.selected_signals.copy()
+        
+        # Update the all_signals list
         self.all_signals = sorted(signals)
+        
+        # Restore the selected_signals list, but only keep signals that are still in all_signals
+        self.selected_signals = [s for s in current_selected if s in self.all_signals]
+        
+        # Refresh the list to reflect the updated signals
         self.refresh_list()
-        print(f"Set available signals to {len(self.all_signals)} items")
+        print(f"Set available signals to {len(self.all_signals)} items, kept {len(self.selected_signals)} selected")
         self.debug_state()
             
     def add_selected_signals(self):
@@ -2349,19 +2362,12 @@ class MainWindow(QMainWindow):
                 self.selected_signals_panel.add_signal(signal)
 
         # Remove signals that are no longer in the graph view
-        current_signals = set(self.selected_signals_panel.signals)
-        signals_set = set(signals)
         signals_to_remove = [s for s in self.selected_signals_panel.signals if s not in signals]
-        if signals:
-            self.selected_signals_panel.set_signals(signals)
-            self.selected_signals_panel.refresh_list()
-            self.selected_signals_panel.debug_state()
-
-        # Remove signals that are no longer in the graph view
-        for signal in self.selected_signals_panel.signals:
-            if signal not in signals:
-                print(f"  Removing signal from panel: {signal}")
-                self.selected_signals_panel.remove_signal(signal, emit_signal=False)
+        for signal in signals_to_remove:
+            print(f"  Removing signal from panel: {signal}")
+            self.selected_signals_panel.remove_signal(signal, emit_signal=False)
+        
+        print(f"=== End update_selected_signals ===\n")
 
     def handle_direct_signal_add(self, signal_name):
         """Handle when a signal is added directly to the graph via drag and drop."""
@@ -2387,11 +2393,18 @@ class MainWindow(QMainWindow):
         # instead of duplicating logic
 
     def handle_direct_signals_add(self, signal_names):
-        """Handle when multiple signals are added directly to the graph via drag and drop."""
-        print("\n=== MainWindow.handle_direct_signals_add START ===")
+        """Handle signals being added directly from the available signals panel or by drag-drop.
+        
+        This version handles multiple signals being added at once, which is important for batch operations.
+        
+        Args:
+            signal_names: List of signal names to add
+        """
+        print(f"\n=== MainWindow.handle_direct_signals_add START ===")
         print(f"Signal names received: {signal_names}")
         print(f"  Type: {type(signal_names)}")
         
+        # Validate that we received a list
         if not isinstance(signal_names, list):
             print(f"  WARNING: Expected list but got {type(signal_names)}")
             if isinstance(signal_names, str):
@@ -2403,9 +2416,6 @@ class MainWindow(QMainWindow):
         
         print(f"  Processing {len(signal_names)} signals")
         
-        # Protect the selected signals list to prevent signals from reappearing
-        self.available_signals_panel.protect_selected_signals()
-        
         # Hide all signals from the available signals panel
         print(f"MainWindow hiding multiple signals from available panel: {signal_names}")
         
@@ -2413,31 +2423,27 @@ class MainWindow(QMainWindow):
         print("Before hiding signals:")
         self.available_signals_panel.debug_state()
         
-        try:
-            # Use the new force_hide_signals method instead of hide_signals
-            print(f"Calling force_hide_signals with: {signal_names}")
-            self.available_signals_panel.force_hide_signals(signal_names)
-            
-            # First, add all signals to the selected signals panel
-            for signal_name in signal_names:
-                if signal_name not in self.selected_signals_panel.signals:
-                    print(f"  Adding signal to selected panel: {signal_name}")
-                    self.selected_signals_panel.add_signal(signal_name)
-                else:
-                    print(f"  Signal already in selected panel: {signal_name}")
-            
-            # Then add all signals to the graph view as a batch operation
-            # This prevents multiple signals_changed emissions that could cause cascading issues
-            print(f"  Adding all signals to graph view as batch")
-            new_signals = [s for s in signal_names if s not in self.graph_view.display_variables]
-            if new_signals:
-                self.graph_view.add_variables(new_signals)
+        # Use the new force_hide_signals method instead of hide_signals
+        print(f"Calling force_hide_signals with: {signal_names}")
+        self.available_signals_panel.force_hide_signals(signal_names)
+        
+        # First, add all signals to the selected signals panel
+        for signal_name in signal_names:
+            if signal_name not in self.selected_signals_panel.signals:
+                print(f"  Adding signal to selected panel: {signal_name}")
+                self.selected_signals_panel.add_signal(signal_name)
             else:
-                print(f"  No new signals to add to graph view")
-        finally:
-            # Always restore the protected signals to ensure they don't get accidentally shown
-            self.available_signals_panel.restore_selected_signals()
-                    
+                print(f"  Signal already in selected panel: {signal_name}")
+        
+        # Then add all signals to the graph view as a batch operation
+        # This prevents multiple signals_changed emissions that could cause cascading issues
+        print(f"  Adding all signals to graph view as batch")
+        new_signals = [s for s in signal_names if s not in self.graph_view.display_variables]
+        if new_signals:
+            self.graph_view.add_variables(new_signals)
+        else:
+            print(f"  No new signals to add to graph view")
+                
         # Force debug state after making changes
         print("After hiding signals:")
         self.available_signals_panel.debug_state()
