@@ -1,5 +1,8 @@
 # Event-Rule System Viewer
 
+> [!WARNING]  
+> This is an AI generated prototype. Absolutely no real engineering has gone into making this.
+
 A Python Qt application for visualizing event-rule systems as directed acyclic graphs (DAGs). This application renders transitions and their causal dependencies with time on the x-axis.
 
 ## Features
@@ -26,7 +29,7 @@ pip install -r requirements.txt
 1. Run the application:
 
 ```bash
-python event_rule_viewer.py
+python3 event_rule_viewer.py
 ```
 
 2. Click the "Load .sim File" button to open a .sim file
